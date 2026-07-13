@@ -1,0 +1,37 @@
+[package]
+name = "lantai"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A BibLaTeX-backed headless reference manager"
+license = "AGPL-3.0-only"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+bibtex-parser = "0.4"
+blake3 = "1.8"
+clap = { version = "4.5", features = ["derive"] }
+deunicode = "1.6"
+directories = "6.0"
+fs4 = "1.1"
+futures-util = "=0.3.31"
+mime_guess = "2.0"
+memmap2 = "0.9"
+notify = "8.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+tempfile = "3.0"
+thiserror = "2.0"
+tokio = { version = "1.0", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.9"
+ureq = { version = "3.3", default-features = false, features = ["json", "multipart"] }
+uuid = { version = "1.0", features = ["serde", "v4"] }
+
+[dev-dependencies]
+proptest = "1.7"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+strip = true
