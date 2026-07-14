@@ -9,7 +9,7 @@ use serde_json::Value as JsonValue;
 use ureq::http::Response;
 use ureq::unversioned::multipart::{Form, Part};
 
-use crate::catalog::{CatalogItem, CheckReport, ItemSummary};
+use crate::catalog::{CatalogItem, CheckReport, ItemView};
 use crate::config::Config;
 use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, MutationResult, TrashEntry,
@@ -33,13 +33,13 @@ pub struct ApiHealth {
 #[derive(Debug, Deserialize)]
 struct ItemResponse {
     #[serde(flatten)]
-    item: CatalogItem,
+    item: ItemView,
     revision: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ListResponse {
-    items: Vec<ItemSummary>,
+    items: Vec<ItemView>,
     revision: String,
 }
 
@@ -135,7 +135,7 @@ impl ApiClient {
         query: Option<&str>,
         entry_type: Option<&str>,
         tag: Option<&str>,
-    ) -> Result<Vec<ItemSummary>> {
+    ) -> Result<Vec<ItemView>> {
         let mut request = self
             .agent
             .get(self.url("/api/v1/items"))
@@ -155,7 +155,7 @@ impl ApiClient {
         Ok(listed.items)
     }
 
-    pub fn get_item(&mut self, id: &str) -> Result<CatalogItem> {
+    pub fn get_item(&mut self, id: &str) -> Result<ItemView> {
         let path = format!("/api/v1/items/{}", encode_path_segment(id));
         let response = self.call(
             self.agent
@@ -383,7 +383,7 @@ impl ApiClient {
         let (item, revision): (ItemResponse, _) = self.decode_with_revision(response)?;
         self.revision = item.revision;
         self.adopt_revision(revision);
-        Ok(item.item)
+        Ok(item.item.into())
     }
 
     fn accept_empty_mutation(&mut self, response: Response<ureq::Body>) -> Result<()> {

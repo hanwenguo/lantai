@@ -139,7 +139,7 @@ Provide:
 - `export`, `format`, `check`
 - `trash list`, `trash purge`
 
-Commands accept UUID or citation key. They use REST when the configured daemon is reachable and authenticated; otherwise they invoke the same locked catalog service directly. Output is human-readable by default with `--json` for automation. `export` emits the complete canonical file or a filtered selection to stdout/path.
+Commands accept UUID or citation key. They use REST when the configured daemon is reachable and authenticated; otherwise they invoke the same locked catalog service directly. `list` and `show` emit rich JSON by default and accept `--format human`; other commands retain human-readable defaults with `--json` for automation. `export` emits the complete canonical file or a filtered selection to stdout/path.
 
 `check` is diagnostic and never changes the library. Any future repair behavior
 must be exposed as an explicit operation.

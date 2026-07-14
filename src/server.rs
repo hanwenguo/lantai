@@ -18,7 +18,7 @@ use serde_json::{Value as JsonValue, json};
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::io::ReaderStream;
 
-use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemSummary};
+use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
 use crate::config::Config;
 use crate::library::{ItemPatch, LibraryLayout, LibraryStore, NewItem};
 use crate::{Error, Result as LantaiResult};
@@ -110,13 +110,13 @@ struct ImportRequest {
 #[derive(Debug, Serialize)]
 struct ItemResponse {
     #[serde(flatten)]
-    item: CatalogItem,
+    item: ItemView,
     revision: String,
 }
 
 #[derive(Debug, Serialize)]
 struct ListResponse {
-    items: Vec<ItemSummary>,
+    items: Vec<ItemView>,
     revision: String,
 }
 
@@ -368,7 +368,7 @@ async fn list_items(
         .iter()
         .filter(|item| matches_query(item, &query))
         .cloned()
-        .map(ItemSummary::from)
+        .map(ItemView::from)
         .collect();
     Ok(json_response(
         StatusCode::OK,
@@ -386,7 +386,7 @@ async fn get_item(State(state): State<AppState>, Path(id): Path<String>) -> ApiR
     Ok(json_response(
         StatusCode::OK,
         &ItemResponse {
-            item,
+            item: item.into(),
             revision: snapshot.revision.clone(),
         },
         &snapshot.revision,
@@ -415,7 +415,7 @@ async fn create_item(
     Ok(json_response(
         StatusCode::CREATED,
         &ItemResponse {
-            item,
+            item: item.into(),
             revision: snapshot.revision.clone(),
         },
         &snapshot.revision,
@@ -450,7 +450,7 @@ async fn patch_item(
     Ok(json_response(
         StatusCode::OK,
         &ItemResponse {
-            item,
+            item: item.into(),
             revision: snapshot.revision.clone(),
         },
         &snapshot.revision,
@@ -1003,12 +1003,58 @@ mod tests {
         assert_eq!(created.status(), StatusCode::CREATED);
         let new_etag = created.headers()[ETAG].to_str().unwrap().to_owned();
         assert_ne!(new_etag, etag);
+        let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        let item_id = body["uuid"].as_str().unwrap();
+        assert_eq!(body["title"], "A Sketch");
+        assert!(body["fields"].is_array());
+        assert_eq!(body["tags"], json!([]));
+        assert_eq!(body["attachments"], json!([]));
+        assert_eq!(
+            new_etag,
+            format!("\"{}\"", body["revision"].as_str().unwrap())
+        );
 
         let mut stale = authorized("POST", "/api/v1/items", Body::from(request.to_string()));
         stale.headers_mut().insert(IF_MATCH, etag.parse().unwrap());
         assert_eq!(
             app.clone().oneshot(stale).await.unwrap().status(),
             StatusCode::CONFLICT
+        );
+
+        let fetched = app
+            .clone()
+            .oneshot(authorized(
+                "GET",
+                &format!("/api/v1/items/{item_id}"),
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(fetched.status(), StatusCode::OK);
+        let body = to_bytes(fetched.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["title"], "A Sketch");
+        assert_eq!(body["entry_type"], "article");
+
+        let patch = json!({"set": {"title": "A Revised Sketch"}});
+        let mut patch_request = authorized(
+            "PATCH",
+            &format!("/api/v1/items/{item_id}"),
+            Body::from(patch.to_string()),
+        );
+        patch_request
+            .headers_mut()
+            .insert(IF_MATCH, new_etag.parse().unwrap());
+        let patched = app.clone().oneshot(patch_request).await.unwrap();
+        assert_eq!(patched.status(), StatusCode::OK);
+        let patched_etag = patched.headers()[ETAG].to_str().unwrap().to_owned();
+        let body = to_bytes(patched.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["title"], "A Revised Sketch");
+        assert_eq!(
+            patched_etag,
+            format!("\"{}\"", body["revision"].as_str().unwrap())
         );
 
         let listed = app
@@ -1019,6 +1065,70 @@ mod tests {
         let body = to_bytes(listed.into_body(), usize::MAX).await.unwrap();
         let body: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body["items"][0]["title"], "A Revised Sketch");
+        assert!(body["items"][0]["fields"].is_array());
+        assert!(body["revision"].is_string());
+    }
+
+    #[tokio::test]
+    async fn api_list_ands_filters_without_stripping_rich_fields() {
+        let (_directory, state) = test_state();
+        state
+            .store()
+            .import_biblatex(concat!(
+                "@article{first,title={Needle},keywords={keep},",
+                "custom=\"raw \" # {value},file={External:/tmp/first.pdf:application/pdf}}\n",
+                "@article{second,title={Needle},keywords={drop}}\n",
+                "@book{third,title={Needle},keywords={keep}}\n",
+                "@article{fourth,title={Other},keywords={keep}}\n"
+            ))
+            .unwrap();
+        state.refresh().await;
+        let app = native_router(state);
+
+        let all = app
+            .clone()
+            .oneshot(authorized("GET", "/api/v1/items", Body::empty()))
+            .await
+            .unwrap();
+        let body = to_bytes(all.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["citation_key"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third", "fourth"]
+        );
+
+        let filtered = app
+            .oneshot(authorized(
+                "GET",
+                "/api/v1/items?q=needle&type=ARTICLE&tag=KEEP",
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(filtered.status(), StatusCode::OK);
+        assert!(filtered.headers().contains_key(ETAG));
+        let body = to_bytes(filtered.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        let items = body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["citation_key"], "first");
+        assert_eq!(items[0]["title"], "Needle");
+        assert_eq!(items[0]["tags"], json!(["keep"]));
+        assert_eq!(items[0]["attachments"][0]["uuid"], JsonValue::Null);
+        assert_eq!(items[0]["attachments"][0]["path"], "/tmp/first.pdf");
+        assert!(
+            items[0]["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| { field["name"] == "custom" && field["raw"] == "\"raw \" # {value}" })
+        );
     }
 
     #[tokio::test]

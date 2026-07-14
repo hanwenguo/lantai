@@ -61,6 +61,11 @@ serve` when testing Connector capture. Lantai preserves Zotero's loopback,
 
 Run `cargo run -- --help` for the complete command surface.
 
+`list` and `show` emit complete JSON records by default for composition with
+tools such as `jq` and `fzf`; pass `--format human` for the legacy terminal
+display. See the [CLI workflow recipes](docs/cli-workflows.md) for fuzzy item
+pickers, compound queries, attachment opening, and safe batch operations.
+
 ## Verification
 
 ```sh
@@ -83,4 +88,5 @@ than synthetic HTTP payloads alone.
 ## Development notes
 
 - [Implementation plan](docs/PLAN.md)
+- [Compose the CLI with jq, fzf, and shell tools](docs/cli-workflows.md)
 - [Zotero desktop/Connector protocol](docs/zotero-connector-protocol.md)

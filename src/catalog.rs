@@ -34,12 +34,22 @@ pub struct CatalogField {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ItemSummary {
+pub struct ItemView {
     pub uuid: Option<Uuid>,
     pub citation_key: String,
     pub entry_type: String,
     pub title: Option<String>,
+    pub fields: Vec<CatalogField>,
     pub tags: Vec<String>,
+    pub attachments: Vec<AttachmentView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttachmentView {
+    pub uuid: Option<Uuid>,
+    pub title: Option<String>,
+    pub path: String,
+    pub media_type: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,8 +111,8 @@ impl<'a> Catalog<'a> {
         self.document.status() == ParseStatus::Ok
     }
 
-    pub fn summaries(&self) -> impl Iterator<Item = ItemSummary> + '_ {
-        self.items().map(ItemSummary::from)
+    pub fn views(&self) -> impl Iterator<Item = ItemView> + '_ {
+        self.items().map(ItemView::from)
     }
 
     pub fn find(&self, id: &str) -> Result<CatalogItem> {
@@ -255,7 +265,7 @@ impl From<&ParsedEntry<'_>> for CatalogItem {
     }
 }
 
-impl From<CatalogItem> for ItemSummary {
+impl From<CatalogItem> for ItemView {
     fn from(item: CatalogItem) -> Self {
         let title = item
             .fields
@@ -267,7 +277,48 @@ impl From<CatalogItem> for ItemSummary {
             citation_key: item.citation_key,
             entry_type: item.entry_type,
             title,
+            fields: item.fields,
             tags: item.tags,
+            attachments: item
+                .attachments
+                .into_iter()
+                .map(AttachmentView::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ItemView> for CatalogItem {
+    fn from(view: ItemView) -> Self {
+        Self {
+            uuid: view.uuid,
+            citation_key: view.citation_key,
+            entry_type: view.entry_type,
+            fields: view.fields,
+            tags: view.tags,
+            attachments: view.attachments.into_iter().map(Attachment::from).collect(),
+        }
+    }
+}
+
+impl From<Attachment> for AttachmentView {
+    fn from(attachment: Attachment) -> Self {
+        Self {
+            uuid: attachment.uuid,
+            title: (!attachment.title.is_empty()).then_some(attachment.title),
+            path: attachment.path,
+            media_type: attachment.media_type,
+        }
+    }
+}
+
+impl From<AttachmentView> for Attachment {
+    fn from(view: AttachmentView) -> Self {
+        Self {
+            uuid: view.uuid,
+            title: view.title.unwrap_or_default(),
+            path: view.path,
+            media_type: view.media_type,
         }
     }
 }
@@ -328,12 +379,52 @@ mod tests {
 
         assert_eq!(item.citation_key, "lovelace1843sketch");
         assert_eq!(item.tags, ["Computing", "history"]);
+        assert_eq!(
+            ItemView::from(item.clone()).title.as_deref(),
+            Some("A Sketch of the Analytical Engine")
+        );
         let abstract_field = item
             .fields
             .iter()
             .find(|field| field.name == "abstract")
             .unwrap();
         assert_eq!(abstract_field.raw.as_deref(), Some("\"raw \" # {value}"));
+    }
+
+    #[test]
+    fn rich_item_view_preserves_all_fields_and_attachment_kinds() {
+        let managed_attachment = "5025cd5a-ead6-47c0-bb9e-b5399556af98-paper.pdf";
+        let source = format!(
+            r#"@misc{{external,
+  note = "raw " # {{value}},
+  keywords = {{Zeta, alpha}},
+  file = {{Managed:library.files/item/{managed_attachment}:application/pdf;:/tmp/external.pdf:application/pdf}}
+}}"#
+        );
+        let catalog = Catalog::parse(Path::new("references.bib"), &source).unwrap();
+        let item = catalog.find("external").unwrap();
+        let view = ItemView::from(item.clone());
+
+        assert_eq!(view.uuid, None);
+        assert_eq!(view.title, None);
+        assert_eq!(
+            view.fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["note", "keywords", "file"]
+        );
+        assert_eq!(view.fields[0].raw.as_deref(), Some("\"raw \" # {value}"));
+        assert_eq!(view.tags, ["alpha", "Zeta"]);
+        assert_eq!(view.attachments.len(), 2);
+        assert_eq!(
+            view.attachments[0].uuid,
+            Some(Uuid::parse_str("5025cd5a-ead6-47c0-bb9e-b5399556af98").unwrap())
+        );
+        assert_eq!(view.attachments[0].title.as_deref(), Some("Managed"));
+        assert_eq!(view.attachments[1].uuid, None);
+        assert_eq!(view.attachments[1].title, None);
+        assert_eq!(CatalogItem::from(view), item);
     }
 
     #[test]

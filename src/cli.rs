@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemSummary};
+use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
 use crate::client::{ApiClient, ApiHealth};
 use crate::config::{
     Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, absolutize, default_config_path, resolve_library,
@@ -27,10 +27,6 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     library: Option<PathBuf>,
 
-    /// Emit stable machine-readable output.
-    #[arg(long, global = true)]
-    json: bool,
-
     /// Override the platform configuration path (primarily for testing).
     #[arg(long, global = true, value_name = "PATH", hide = true)]
     config: Option<PathBuf>,
@@ -50,10 +46,16 @@ enum Command {
         /// Store managed files here instead of in the adjacent <stem>.files directory.
         #[arg(long, value_name = "PATH")]
         attachments: Option<PathBuf>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Report whether the configured library and attachment directory are accessible.
-    Health,
+    Health {
+        #[command(flatten)]
+        output: JsonOutput,
+    },
 
     /// Run the authenticated local REST API.
     Serve,
@@ -70,6 +72,10 @@ enum Command {
         /// Include only entries with this tag.
         #[arg(long)]
         tag: Option<String>,
+
+        /// Select JSON or the legacy tab-separated display (defaults to JSON).
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
     },
 
     /// Add a bibliography entry.
@@ -93,10 +99,19 @@ enum Command {
         /// Import one or more BibLaTeX entries from a file, or use - for standard input.
         #[arg(long, value_name = "FILE")]
         from: Option<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Show one entry by UUID or unambiguous citation key.
-    Show { id: String },
+    Show {
+        id: String,
+
+        /// Select JSON or the legacy field-oriented display (defaults to JSON).
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
+    },
 
     /// Set literal fields and optionally rename the citation key.
     Set {
@@ -109,6 +124,9 @@ enum Command {
         /// Rename the citation key.
         #[arg(long)]
         key: Option<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Set exact BibTeX value expressions without normalizing their syntax.
@@ -118,6 +136,9 @@ enum Command {
         /// Set a field as NAME=EXPRESSION. May be repeated.
         #[arg(value_name = "NAME=EXPRESSION", required = true)]
         fields: Vec<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Remove fields from an entry.
@@ -126,27 +147,44 @@ enum Command {
 
         #[arg(required = true)]
         fields: Vec<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Add or remove item tags.
     Tag {
         #[command(subcommand)]
         action: TagAction,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Remove an entry and move its managed attachments to trash.
-    Remove { id: String },
+    Remove {
+        id: String,
+
+        #[command(flatten)]
+        output: JsonOutput,
+    },
 
     /// Detach a managed attachment and move its file to trash.
     Detach {
         id: String,
         attachment_id: uuid::Uuid,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Inspect or empty the managed attachment trash.
     Trash {
         #[command(subcommand)]
         action: TrashAction,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Copy a file into the managed attachment store.
@@ -161,6 +199,9 @@ enum Command {
         /// Media type; inferred from the filename when omitted.
         #[arg(long = "mime")]
         media_type: Option<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Export the canonical bibliography or selected entries.
@@ -174,10 +215,16 @@ enum Command {
     },
 
     /// Canonicalize managed syntax and assign missing stable IDs.
-    Format,
+    Format {
+        #[command(flatten)]
+        output: JsonOutput,
+    },
 
     /// Diagnose the bibliography without changing it.
-    Check,
+    Check {
+        #[command(flatten)]
+        output: JsonOutput,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -203,6 +250,19 @@ enum TrashAction {
     List,
     /// Permanently delete every trashed file.
     Purge,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Json,
+    Human,
+}
+
+#[derive(Debug, Args)]
+struct JsonOutput {
+    /// Emit JSON instead of the human-readable display.
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Serialize)]
@@ -290,7 +350,7 @@ impl Backend {
         query: Option<&str>,
         entry_type: Option<&str>,
         tag: Option<&str>,
-    ) -> Result<Vec<ItemSummary>> {
+    ) -> Result<Vec<ItemView>> {
         match &mut self.mode {
             BackendMode::Daemon(client) => client.list(query, entry_type, tag),
             BackendMode::Direct(_) => {
@@ -299,7 +359,7 @@ impl Backend {
                 Ok(catalog
                     .items()
                     .filter(|item| matches_item(item, query, entry_type, tag))
-                    .map(ItemSummary::from)
+                    .map(ItemView::from)
                     .collect())
             }
         }
@@ -321,12 +381,14 @@ impl Backend {
         }
     }
 
-    fn get(&mut self, id: &str) -> Result<CatalogItem> {
+    fn get(&mut self, id: &str) -> Result<ItemView> {
         match &mut self.mode {
             BackendMode::Daemon(client) => client.get_item(id),
             BackendMode::Direct(_) => {
                 let contents = self.layout.read_utf8()?;
-                Catalog::parse(&self.layout.bibliography, &contents)?.find(id)
+                Catalog::parse(&self.layout.bibliography, &contents)?
+                    .find(id)
+                    .map(ItemView::from)
             }
         }
     }
@@ -453,10 +515,14 @@ fn run_cli(cli: Cli) -> Result<()> {
     };
 
     match cli.command {
-        Command::Init { force, attachments } => {
-            init(cli.library, attachments, cli.json, &config_path, force)
-        }
-        Command::Health => {
+        Command::Init {
+            force,
+            attachments,
+            output,
+        } => init(cli.library, attachments, output.json, &config_path, force),
+        Command::Health {
+            output: json_output,
+        } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             if !backend.layout.attachments.is_dir() {
                 return Err(Error::LibraryNotFile {
@@ -472,7 +538,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 warnings: health.warnings,
                 errors: health.errors,
             };
-            if cli.json {
+            if json_output.json {
                 print_json(&output)
             } else {
                 println!(
@@ -505,11 +571,12 @@ fn run_cli(cli: Cli) -> Result<()> {
             query,
             entry_type,
             tag,
+            format,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let summaries =
                 backend.list(query.as_deref(), entry_type.as_deref(), tag.as_deref())?;
-            if cli.json {
+            if item_output_is_json(format) {
                 print_json(&summaries)
             } else {
                 for item in summaries {
@@ -528,12 +595,13 @@ fn run_cli(cli: Cli) -> Result<()> {
             fields,
             key,
             from,
+            output,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             if let Some(from) = from {
                 let source = read_import_source(&from)?;
                 let added = backend.import(&source)?;
-                if cli.json {
+                if output.json {
                     return print_json(&added);
                 }
                 for item in added {
@@ -550,24 +618,29 @@ fn run_cli(cli: Cli) -> Result<()> {
                 citation_key: key,
                 fields,
             })?;
-            if cli.json {
+            if output.json {
                 print_json(&added)
             } else {
                 println!("Added {} ({})", added.citation_key, added.uuid);
                 Ok(())
             }
         }
-        Command::Show { id } => {
+        Command::Show { id, format } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let item = backend.get(&id)?;
-            if cli.json {
+            if item_output_is_json(format) {
                 print_json(&item)
             } else {
                 print_item(&item);
                 Ok(())
             }
         }
-        Command::Set { id, fields, key } => {
+        Command::Set {
+            id,
+            fields,
+            key,
+            output,
+        } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let fields = fields
                 .into_iter()
@@ -581,9 +654,9 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
-            print_mutation_result("Updated", &result.citation_key, result.uuid, cli.json)
+            print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::SetRaw { id, fields } => {
+        Command::SetRaw { id, fields, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let fields = fields
                 .into_iter()
@@ -596,9 +669,9 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
-            print_mutation_result("Updated", &result.citation_key, result.uuid, cli.json)
+            print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::Unset { id, fields } => {
+        Command::Unset { id, fields, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = backend.patch(
                 &id,
@@ -607,30 +680,34 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
-            print_mutation_result("Updated", &result.citation_key, result.uuid, cli.json)
+            print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::Tag { action } => {
+        Command::Tag { action, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = match action {
                 TagAction::Add { id, tags } => backend.change_tags(&id, &tags, true)?,
                 TagAction::Remove { id, tags } => backend.change_tags(&id, &tags, false)?,
             };
-            print_mutation_result("Updated", &result.citation_key, result.uuid, cli.json)
+            print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::Remove { id } => {
+        Command::Remove { id, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = backend.remove(&id)?;
-            if cli.json {
+            if output.json {
                 print_json(&result)
             } else {
                 println!("Removed {}", result.citation_key);
                 Ok(())
             }
         }
-        Command::Detach { id, attachment_id } => {
+        Command::Detach {
+            id,
+            attachment_id,
+            output,
+        } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = backend.detach(&id, attachment_id)?;
-            if cli.json {
+            if output.json {
                 print_json(&result)
             } else {
                 println!(
@@ -640,12 +717,12 @@ fn run_cli(cli: Cli) -> Result<()> {
                 Ok(())
             }
         }
-        Command::Trash { action } => {
+        Command::Trash { action, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             match action {
                 TrashAction::List => {
                     let entries = backend.trash_entries()?;
-                    if cli.json {
+                    if output.json {
                         print_json(&entries)
                     } else {
                         for entry in entries {
@@ -656,7 +733,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 }
                 TrashAction::Purge => {
                     let purged = backend.purge_trash()?;
-                    if cli.json {
+                    if output.json {
                         print_json(&serde_json::json!({ "purged": purged }))
                     } else {
                         println!("Purged {purged} trashed files");
@@ -670,10 +747,11 @@ fn run_cli(cli: Cli) -> Result<()> {
             file,
             title,
             media_type,
+            output,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = backend.attach(&id, &file, title.as_deref(), media_type.as_deref())?;
-            if cli.json {
+            if output.json {
                 print_json(&result)
             } else {
                 println!(
@@ -688,10 +766,10 @@ fn run_cli(cli: Cli) -> Result<()> {
             let contents = backend.export(&ids)?;
             write_export(output.as_deref(), &contents)
         }
-        Command::Format => {
+        Command::Format { output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let result = backend.format()?;
-            if cli.json {
+            if output.json {
                 print_json(&result)
             } else {
                 println!(
@@ -701,10 +779,10 @@ fn run_cli(cli: Cli) -> Result<()> {
                 Ok(())
             }
         }
-        Command::Check => {
+        Command::Check { output } => {
             let backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let report = backend.check()?;
-            if cli.json {
+            if output.json {
                 print_json(&report)?;
             } else {
                 print_check(&report);
@@ -880,7 +958,11 @@ fn print_mutation_result(
     }
 }
 
-fn print_item(item: &CatalogItem) {
+fn item_output_is_json(format: Option<OutputFormat>) -> bool {
+    format != Some(OutputFormat::Human)
+}
+
+fn print_item(item: &ItemView) {
     println!("@{}{{{}}}", item.entry_type, item.citation_key);
     if let Some(uuid) = item.uuid {
         println!("UUID: {uuid}");
@@ -959,40 +1041,45 @@ mod tests {
 
         let daemon_config_path = config_path.clone();
         let daemon_attachment = attachment.clone();
-        let (item_uuid, attachment_uuid) = tokio::task::spawn_blocking(move || {
-            let mut backend = Backend::load(None, &daemon_config_path).unwrap();
-            assert!(matches!(backend.mode, BackendMode::Daemon(_)));
-            let added = backend
-                .add(NewItem {
-                    entry_type: "article".to_owned(),
-                    citation_key: Some("parity".to_owned()),
-                    fields: vec![("title".to_owned(), "Before".to_owned())],
-                })
-                .unwrap();
-            backend
-                .change_tags(&added.uuid.to_string(), &["remote".to_owned()], true)
-                .unwrap();
-            let attached = backend
-                .attach(
-                    &added.uuid.to_string(),
-                    &daemon_attachment,
-                    Some("Paper"),
-                    Some("application/pdf"),
-                )
-                .unwrap();
-            backend
-                .patch(
-                    &added.uuid.to_string(),
-                    ItemPatch {
-                        set: BTreeMap::from([("title".to_owned(), "After".to_owned())]),
-                        ..ItemPatch::default()
-                    },
-                )
-                .unwrap();
-            (added.uuid, attached.attachment_uuid)
-        })
-        .await
-        .unwrap();
+        let (item_uuid, attachment_uuid, daemon_item, daemon_list) =
+            tokio::task::spawn_blocking(move || {
+                let mut backend = Backend::load(None, &daemon_config_path).unwrap();
+                assert!(matches!(backend.mode, BackendMode::Daemon(_)));
+                let added = backend
+                    .add(NewItem {
+                        entry_type: "article".to_owned(),
+                        citation_key: Some("parity".to_owned()),
+                        fields: vec![("title".to_owned(), "Before".to_owned())],
+                    })
+                    .unwrap();
+                backend
+                    .change_tags(&added.uuid.to_string(), &["remote".to_owned()], true)
+                    .unwrap();
+                let attached = backend
+                    .attach(
+                        &added.uuid.to_string(),
+                        &daemon_attachment,
+                        Some("Paper"),
+                        Some("application/pdf"),
+                    )
+                    .unwrap();
+                backend
+                    .patch(
+                        &added.uuid.to_string(),
+                        ItemPatch {
+                            set: BTreeMap::from([("title".to_owned(), "After".to_owned())]),
+                            ..ItemPatch::default()
+                        },
+                    )
+                    .unwrap();
+                let item = backend.get(&added.uuid.to_string()).unwrap();
+                let listed = backend
+                    .list(Some("After"), Some("article"), Some("REMOTE"))
+                    .unwrap();
+                (added.uuid, attached.attachment_uuid, item, listed)
+            })
+            .await
+            .unwrap();
 
         server.abort();
         let _ = server.await;
@@ -1009,6 +1096,13 @@ mod tests {
         );
         assert_eq!(item.tags, vec!["remote"]);
         assert_eq!(item.attachments[0].uuid, Some(attachment_uuid));
+        assert_eq!(item, daemon_item);
+        assert_eq!(
+            direct
+                .list(Some("After"), Some("ARTICLE"), Some("remote"))
+                .unwrap(),
+            daemon_list
+        );
         direct
             .patch(
                 &item_uuid.to_string(),
@@ -1100,5 +1194,27 @@ mod tests {
         let exported = std::fs::read_to_string(export_path).unwrap();
         assert!(exported.contains("@misc{first,"));
         assert!(!exported.contains("@misc{second,"));
+    }
+
+    #[test]
+    fn item_output_defaults_to_json_without_a_legacy_json_flag() {
+        assert!(item_output_is_json(None));
+        assert!(item_output_is_json(Some(OutputFormat::Json)));
+        assert!(!item_output_is_json(Some(OutputFormat::Human)));
+
+        let parsed = Cli::try_parse_from(["lantai", "list", "--format", "human"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::List {
+                format: Some(OutputFormat::Human),
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["lantai", "list", "--json"]).is_err());
+        assert!(Cli::try_parse_from(["lantai", "show", "item", "--json"]).is_err());
+        assert!(Cli::try_parse_from(["lantai", "health", "--json"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["lantai", "tag", "add", "item", "reviewed", "--json"]).is_ok()
+        );
     }
 }
