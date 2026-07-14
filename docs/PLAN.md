@@ -1,5 +1,9 @@
 # Lantai 0.2.0: BibLaTeX-backed headless reference manager
 
+> **Development reference:** This file records implementation goals and design
+> decisions. For current user instructions, start with the [Lantai user
+> manual](index.md).
+
 ## Goal
 
 Lantai is a small, headless reference manager for a personal bibliography

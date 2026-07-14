@@ -2,6 +2,9 @@
 
 This document describes the local protocol between the Zotero browser Connector and the Zotero desktop client. It is intended to guide Lantai's implementation of a Connector-compatible, headless endpoint, not to specify Zotero's cloud API or its word-processor integration.
 
+This is a developer protocol reference. Users configuring browser capture
+should start with [Zotero Connector setup](zotero-connector.md).
+
 The description is based on these reference snapshots:
 
 - Zotero desktop `582333397dc5ec308c011ef76bba2084749d0326` (2026-07-12)

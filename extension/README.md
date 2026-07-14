@@ -1,5 +1,9 @@
 # Lantai extensions
 
+This is the canonical installation and authoring reference for extensions. For
+the broader user-manual navigation and worked workflows, see the [Lantai user
+manual](../docs/index.md) and [CLI workflow guide](../docs/cli-workflows.md).
+
 Lantai supports Git-style custom subcommands. When `NAME` is not a built-in
 command, `lantai NAME ARGS...` searches `PATH` for an executable named
 `lantai-NAME` and runs it with the remaining arguments.

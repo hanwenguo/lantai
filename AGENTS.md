@@ -9,6 +9,11 @@ These instructions apply to the entire repository.
   into a commit.
 - Keep changes narrowly scoped. Update tests and user-facing documentation in
   the same change as the behavior they describe.
+- Treat documentation as part of every feature. Whenever a user-visible
+  feature, interface, default, limitation, or workflow is added or changed,
+  update the affected user-manual pages, reference material, examples, and
+  navigation in the same change. A feature is not complete while its
+  documentation is missing or stale.
 - `Cargo.lock` is committed because Lantai is an application. Commit useful
   `proptest-regressions/` seeds, but never commit `target/`, `output/`, local
   configuration, bearer tokens, browser profiles, or captured attachment data.

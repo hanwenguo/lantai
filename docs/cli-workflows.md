@@ -1,5 +1,7 @@
 # Compose Lantai with official extensions
 
+[Back to the user manual](index.md).
+
 `lantai list` and `lantai show` write JSON by default. Lantai also ships
 Git-style extension commands for common `jq`, `fzf`, and shell
 workflows. Add the repository's `extension/` directory to `PATH` or
@@ -24,39 +26,9 @@ lantai show vaswani2023attention --format human
 ## Item JSON
 
 `lantai list` returns an array in bibliography source order. `lantai show`
-returns one object with the same item shape:
-
-```json
-{
-  "uuid": "f450ca71-aa2a-49a1-91d3-2818f42f0903",
-  "citation_key": "vaswani2023attention",
-  "entry_type": "online",
-  "title": "Attention Is All You Need",
-  "fields": [
-    {
-      "name": "author",
-      "value": "Vaswani, Ashish and Shazeer, Noam",
-      "raw": "{Vaswani, Ashish and Shazeer, Noam}"
-    }
-  ],
-  "tags": ["machine-learning"],
-  "attachments": [
-    {
-      "uuid": "5025cd5a-ead6-47c0-bb9e-b5399556af98",
-      "title": "Preprint PDF",
-      "path": "library.files/f450ca71-aa2a-49a1-91d3-2818f42f0903/5025cd5a-ead6-47c0-bb9e-b5399556af98-paper.pdf",
-      "media_type": "application/pdf"
-    }
-  ]
-}
-```
-
-`fields` retains every BibLaTeX field in source order. `value` is the
-expanded text used for searching; `raw` is included when an exact source
-expression is available. `title`, `tags`, and `attachments` are
-convenient projections. Externally added entries can have a `null` UUID
-until mutated or formatted. External attachments likewise have a `null`
-UUID, and an attachment without a display title has a `null` title.
+returns one object with the same shape. See the canonical [public item JSON
+schema](library-model.md#public-item-json) for fields, raw expressions, tags,
+attachments, ordering, and nullable identities.
 
 ## Render a table
 
