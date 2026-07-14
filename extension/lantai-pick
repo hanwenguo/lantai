@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai pick [--id-only] [-- LIST_ARGS...]
+
+Fuzzy-select an item. By default the selected complete JSON object is written
+to stdout; --id-only writes its UUID or citation-key fallback. Arguments after
+`--` are forwarded to `lantai list`.
+EOF
+}
+
+id_only=false
+list_args=()
+while (($# > 0)); do
+  case $1 in
+    --id-only)
+      id_only=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      list_args=("$@")
+      break
+      ;;
+    *)
+      echo "lantai pick: unexpected argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+for dependency in jq fzf; do
+  command -v "$dependency" >/dev/null 2>&1 || {
+    echo "lantai pick: $dependency is required" >&2
+    exit 127
+  }
+done
+
+export LANTAI="${LANTAI:-lantai}"
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+preview='if [ -n "${LANTAI_CONFIG:-}" ]; then
+  "$LANTAI" --config "$LANTAI_CONFIG" show {1}
+else
+  "$LANTAI" show {1}
+fi | jq -C'
+
+status=0
+selection=$(
+  "$LANTAI" "${lantai_args[@]}" list "${list_args[@]}" |
+    jq -r '
+      .[]
+      | [
+          (.uuid // .citation_key),
+          (.citation_key | gsub("[\\t\\r\\n]"; " ")),
+          ((.title // "") | gsub("[\\t\\r\\n]"; " "))
+        ]
+      | @tsv
+    ' |
+    fzf \
+      --delimiter=$'\t' \
+      --with-nth=2,3 \
+      --prompt='Lantai> ' \
+      --preview="$preview"
+) || status=$?
+
+case $status in
+  0) ;;
+  1|130) exit 0 ;;
+  *) exit "$status" ;;
+esac
+[[ -n $selection ]] || exit 0
+
+item_id=${selection%%$'\t'*}
+if $id_only; then
+  printf '%s\n' "$item_id"
+else
+  "$LANTAI" "${lantai_args[@]}" show "$item_id"
+fi

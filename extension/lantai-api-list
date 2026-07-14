@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai api-list [QUERY] [--type TYPE] [--tag TAG]
+
+Query the native REST API and emit its complete {"items": [...], "revision":
+"..."} envelope. LANTAI_TOKEN is required; LANTAI_API_URL defaults to
+http://127.0.0.1:23120.
+EOF
+}
+
+query=
+entry_type=
+tag=
+while (($# > 0)); do
+  case $1 in
+    --type)
+      (($# >= 2)) || { echo "lantai api-list: --type requires a value" >&2; exit 2; }
+      entry_type=$2
+      shift 2
+      ;;
+    --tag)
+      (($# >= 2)) || { echo "lantai api-list: --tag requires a value" >&2; exit 2; }
+      tag=$2
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "lantai api-list: unexpected option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -n $query ]]; then
+        echo "lantai api-list: only one QUERY may be supplied" >&2
+        exit 2
+      fi
+      query=$1
+      shift
+      ;;
+  esac
+done
+
+for dependency in curl jq; do
+  command -v "$dependency" >/dev/null 2>&1 || {
+    echo "lantai api-list: $dependency is required" >&2
+    exit 127
+  }
+done
+if [[ -z ${LANTAI_TOKEN:-} ]]; then
+  echo "lantai api-list: LANTAI_TOKEN is required" >&2
+  exit 2
+fi
+
+api_url=${LANTAI_API_URL:-http://127.0.0.1:23120}
+curl_args=(
+  --fail
+  --silent
+  --show-error
+  --get
+  --header "Authorization: Bearer $LANTAI_TOKEN"
+)
+[[ -z $query ]] || curl_args+=(--data-urlencode "q=$query")
+[[ -z $entry_type ]] || curl_args+=(--data-urlencode "type=$entry_type")
+[[ -z $tag ]] || curl_args+=(--data-urlencode "tag=$tag")
+
+curl "${curl_args[@]}" "${api_url%/}/api/v1/items" | jq .

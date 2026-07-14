@@ -1,4 +1,4 @@
-# Lantai 0.1.0: BibLaTeX-backed headless reference manager
+# Lantai 0.2.0: BibLaTeX-backed headless reference manager
 
 ## Goal
 
@@ -141,6 +141,11 @@ Provide:
 
 Commands accept UUID or citation key. They use REST when the configured daemon is reachable and authenticated; otherwise they invoke the same locked catalog service directly. `list` and `show` emit rich JSON by default and accept `--format human`; other commands retain human-readable defaults with `--json` for automation. `export` emits the complete canonical file or a filtered selection to stdout/path.
 
+Unknown command names use Git-style extension dispatch: `lantai NAME` runs a
+`lantai-NAME` executable found on `PATH`. Official Bash extensions provide the
+documented table, rich-query, fuzzy-selection, attachment-opening, batch-tag,
+and direct REST workflows without expanding the built-in query language.
+
 `check` is diagnostic and never changes the library. Any future repair behavior
 must be exposed as an explicit operation.
 
@@ -171,7 +176,7 @@ must be exposed as an explicit operation.
 
 ## Completion criteria
 
-Version 0.1.0 is complete when an unmodified Zotero Connector can save common web
+Version 0.2.0 is complete when an unmodified Zotero Connector can save common web
 items and attachments into Lantai; the result remains a valid, human-editable
 BibLaTeX library; external edits are detected without losing unmanaged source
 text; item, tag, and attachment operations work through both CLI and REST; and

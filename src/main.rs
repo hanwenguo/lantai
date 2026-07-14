@@ -1,11 +1,10 @@
-use std::process::ExitCode;
-
-fn main() -> ExitCode {
-    match lantai::cli::run() {
-        Ok(()) => ExitCode::SUCCESS,
+fn main() {
+    let code = match lantai::cli::run() {
+        Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error}");
-            ExitCode::FAILURE
+            1
         }
-    }
+    };
+    std::process::exit(code);
 }

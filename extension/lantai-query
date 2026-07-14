@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai query FILTER [-- LIST_ARGS...]
+
+Select complete item objects with a jq predicate. FILTER runs once per item
+with the item as `.` and a `$fields` object containing lowercase field names
+and expanded field values. Arguments after `--` are forwarded to `lantai list`.
+EOF
+}
+
+if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
+  usage
+  exit 0
+fi
+if (($# == 0)); then
+  usage >&2
+  exit 2
+fi
+
+filter=$1
+shift
+if (($# > 0)); then
+  if [[ $1 != "--" ]]; then
+    echo "lantai query: list arguments must follow --" >&2
+    exit 2
+  fi
+  shift
+fi
+
+command -v jq >/dev/null 2>&1 || {
+  echo "lantai query: jq is required" >&2
+  exit 127
+}
+
+export LANTAI="${LANTAI:-lantai}"
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+jq_program='map(
+  . as $item
+  | (reduce $item.fields[]? as $field
+      ({}; .[$field.name | ascii_downcase] = $field.value)) as $fields
+  | select('"$filter"')
+)'
+
+"$LANTAI" "${lantai_args[@]}" list "$@" | jq "$jq_program"

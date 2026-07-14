@@ -4,7 +4,7 @@ About the name: 兰台 (lán tái, orchid platform) is the name of the Royal Lib
 
 ## Current implementation
 
-Lantai 0.1.0 is a working Rust implementation. It keeps the bibliography
+Lantai 0.2.0 is a working Rust implementation. It keeps the bibliography
 as a human-editable BibLaTeX file while providing:
 
 - locked, atomic item and tag CRUD with stable UUIDs and generated citation keys;
@@ -66,6 +66,10 @@ tools such as `jq` and `fzf`; pass `--format human` for the legacy terminal
 display. See the [CLI workflow recipes](docs/cli-workflows.md) for fuzzy item
 pickers, compound queries, attachment opening, and safe batch operations.
 
+Unknown commands use Git-style extension discovery: `lantai NAME` executes a
+`lantai-NAME` program found on `PATH`. Lantai ships supported Bash extensions
+for the documented workflows in [`extension/`](extension/README.md).
+
 ## Verification
 
 ```sh
@@ -89,4 +93,5 @@ than synthetic HTTP payloads alone.
 
 - [Implementation plan](docs/PLAN.md)
 - [Compose the CLI with jq, fzf, and shell tools](docs/cli-workflows.md)
+- [Install or write Git-style extensions](extension/README.md)
 - [Zotero desktop/Connector protocol](docs/zotero-connector-protocol.md)

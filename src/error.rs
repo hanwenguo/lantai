@@ -147,6 +147,25 @@ pub enum Error {
     #[error("failed to serialize JSON output: {0}")]
     SerializeJson(#[from] serde_json::Error),
 
+    #[error("invalid custom subcommand name: {name:?}")]
+    InvalidExtensionName { name: String },
+
+    #[error("{name:?} is not a lantai command; install `lantai-{name}` on PATH")]
+    ExtensionNotFound { name: String },
+
+    #[error("failed to launch custom subcommand {executable}: {source}")]
+    LaunchExtension {
+        executable: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to locate the current Lantai executable: {source}")]
+    CurrentExecutable {
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("Lantai daemon at {address} returned {status} {code}: {message}")]
     Api {
         address: String,

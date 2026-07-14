@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai table [LIST_ARGS...]
+
+Render citation key, entry type, and title as a terminal table. All arguments
+are forwarded to `lantai list`.
+EOF
+}
+
+if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+command -v jq >/dev/null 2>&1 || {
+  echo "lantai table: jq is required" >&2
+  exit 127
+}
+
+export LANTAI="${LANTAI:-lantai}"
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+render_table() {
+  jq -r '
+    ["KEY", "TYPE", "TITLE"],
+    (.[] | [.citation_key, .entry_type, (.title // "")])
+    | @tsv
+  '
+}
+
+if command -v column >/dev/null 2>&1; then
+  "$LANTAI" "${lantai_args[@]}" list "$@" | render_table | column -t -s $'\t'
+else
+  "$LANTAI" "${lantai_args[@]}" list "$@" | render_table
+fi

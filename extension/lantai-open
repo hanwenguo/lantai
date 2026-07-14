@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai open [--print] [-- LIST_ARGS...]
+
+Fuzzy-select an attachment and open it with macOS `open` or Linux
+`xdg-open`. Use --print to write the resolved path without opening it.
+Arguments after `--` are forwarded to `lantai list`.
+EOF
+}
+
+print_only=false
+list_args=()
+while (($# > 0)); do
+  case $1 in
+    --print)
+      print_only=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      list_args=("$@")
+      break
+      ;;
+    *)
+      echo "lantai open: unexpected argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+for dependency in jq fzf; do
+  command -v "$dependency" >/dev/null 2>&1 || {
+    echo "lantai open: $dependency is required" >&2
+    exit 127
+  }
+done
+
+export LANTAI="${LANTAI:-lantai}"
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+status=0
+selection=$(
+  "$LANTAI" "${lantai_args[@]}" list "${list_args[@]}" |
+    jq -r '
+      .[] as $item
+      | $item.attachments[]?
+      | [
+          ($item.uuid // $item.citation_key),
+          ($item.citation_key | gsub("[\\t\\r\\n]"; " ")),
+          ((.title // "") | gsub("[\\t\\r\\n]"; " ")),
+          (.media_type | gsub("[\\t\\r\\n]"; " ")),
+          (.path | gsub("[\\t\\r\\n]"; " ")),
+          (.path | @base64)
+        ]
+      | @tsv
+    ' |
+    fzf --delimiter=$'\t' --with-nth=2,3,4,5 --prompt='Attachment> '
+) || status=$?
+
+case $status in
+  0) ;;
+  1|130) exit 0 ;;
+  *) exit "$status" ;;
+esac
+[[ -n $selection ]] || exit 0
+
+encoded_path=$(printf '%s\n' "$selection" | cut -f6)
+attachment_path=$(jq -rn --arg path "$encoded_path" '$path | @base64d')
+if [[ $attachment_path == /* ]]; then
+  resolved_path=$attachment_path
+else
+  library=$(
+    "$LANTAI" "${lantai_args[@]}" health --json |
+      jq -er '.library'
+  )
+  resolved_path=$(dirname -- "$library")/$attachment_path
+fi
+
+if $print_only; then
+  printf '%s\n' "$resolved_path"
+elif [[ $(uname -s) == Darwin ]]; then
+  command -v open >/dev/null 2>&1 || {
+    echo "lantai open: open is required on macOS" >&2
+    exit 127
+  }
+  open -- "$resolved_path"
+else
+  command -v xdg-open >/dev/null 2>&1 || {
+    echo "lantai open: xdg-open is required on this platform" >&2
+    exit 127
+  }
+  xdg-open "$resolved_path"
+fi

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lantai batch-tag [--apply] TAG FILTER [-- LIST_ARGS...]
+
+Preview items selected by a jq predicate and add TAG to them. FILTER runs with
+each item as `.` and a lowercase `$fields` object. No changes occur unless
+--apply is present. Arguments after `--` are forwarded to `lantai list`.
+EOF
+}
+
+apply=false
+if [[ ${1:-} == "--apply" ]]; then
+  apply=true
+  shift
+fi
+if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
+  usage
+  exit 0
+fi
+if (($# < 2)); then
+  usage >&2
+  exit 2
+fi
+
+tag=$1
+filter=$2
+shift 2
+if (($# > 0)); then
+  if [[ $1 != "--" ]]; then
+    echo "lantai batch-tag: list arguments must follow --" >&2
+    exit 2
+  fi
+  shift
+fi
+
+command -v jq >/dev/null 2>&1 || {
+  echo "lantai batch-tag: jq is required" >&2
+  exit 127
+}
+
+export LANTAI="${LANTAI:-lantai}"
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+selection_file=$(mktemp "${TMPDIR:-/tmp}/lantai-batch-tag.XXXXXX")
+trap 'rm -f "$selection_file"' EXIT
+
+jq_program='map(
+  . as $item
+  | (reduce $item.fields[]? as $field
+      ({}; .[$field.name | ascii_downcase] = $field.value)) as $fields
+  | select('"$filter"')
+)'
+
+"$LANTAI" "${lantai_args[@]}" list "$@" | jq "$jq_program" >"$selection_file"
+
+render_preview() {
+  jq -r '
+    ["UUID", "KEY", "TITLE"],
+    (.[] | [(.uuid // ""), .citation_key, (.title // "")])
+    | @tsv
+  ' "$selection_file"
+}
+if command -v column >/dev/null 2>&1; then
+  render_preview | column -t -s $'\t'
+else
+  render_preview
+fi
+
+if ! $apply; then
+  echo "Preview only; rerun with --apply to add tag '$tag'." >&2
+  exit 0
+fi
+
+if jq -e 'any(.[]; .uuid == null)' "$selection_file" >/dev/null; then
+  echo "lantai batch-tag: refusing to apply because a selected item has no UUID; run lantai format first" >&2
+  exit 2
+fi
+
+count=$(jq 'length' "$selection_file")
+if ((count == 0)); then
+  echo "No matching items." >&2
+  exit 0
+fi
+
+while IFS= read -r -d '' uuid; do
+  "$LANTAI" "${lantai_args[@]}" tag add "$uuid" "$tag" --json >/dev/null
+done < <(jq -j '.[] | .uuid, "\u0000"' "$selection_file")
+
+printf "Tagged %d item(s) with '%s'.\n" "$count" "$tag"

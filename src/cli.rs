@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
+use std::env;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::process::{Command as ProcessCommand, ExitStatus, Stdio};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -8,7 +11,8 @@ use serde::Serialize;
 use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
 use crate::client::{ApiClient, ApiHealth};
 use crate::config::{
-    Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, absolutize, default_config_path, resolve_library,
+    Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, LIBRARY_ENV, absolutize, default_config_path,
+    resolve_library,
 };
 use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, LibraryLayout, LibraryStore,
@@ -225,6 +229,9 @@ enum Command {
         #[command(flatten)]
         output: JsonOutput,
     },
+
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -504,8 +511,16 @@ impl Backend {
     }
 }
 
-pub fn run() -> Result<()> {
-    run_cli(Cli::parse())
+pub fn run() -> Result<i32> {
+    run_parsed(Cli::parse())
+}
+
+fn run_parsed(cli: Cli) -> Result<i32> {
+    if let Command::External(arguments) = &cli.command {
+        return run_extension(cli.library.as_deref(), cli.config.as_deref(), arguments);
+    }
+    run_cli(cli)?;
+    Ok(0)
 }
 
 fn run_cli(cli: Cli) -> Result<()> {
@@ -795,6 +810,74 @@ fn run_cli(cli: Cli) -> Result<()> {
                 Ok(())
             }
         }
+        Command::External(_) => unreachable!("external commands are dispatched before built-ins"),
+    }
+}
+
+fn run_extension(
+    library: Option<&std::path::Path>,
+    config: Option<&std::path::Path>,
+    arguments: &[OsString],
+) -> Result<i32> {
+    let (name, arguments) = arguments
+        .split_first()
+        .expect("clap external subcommands always include a name");
+    let executable = extension_executable(name)?;
+    let current_executable =
+        env::current_exe().map_err(|source| Error::CurrentExecutable { source })?;
+
+    let mut command = ProcessCommand::new(&executable);
+    command
+        .args(arguments)
+        .env("LANTAI", current_executable)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if let Some(library) = library {
+        command.env(LIBRARY_ENV, library);
+    }
+    if let Some(config) = config {
+        command.env("LANTAI_CONFIG", config);
+    } else {
+        command.env_remove("LANTAI_CONFIG");
+    }
+
+    match command.status() {
+        Ok(status) => Ok(extension_status_code(status)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Err(Error::ExtensionNotFound {
+            name: name.to_string_lossy().into_owned(),
+        }),
+        Err(source) => Err(Error::LaunchExtension {
+            executable: PathBuf::from(executable),
+            source,
+        }),
+    }
+}
+
+fn extension_executable(name: &OsStr) -> Result<OsString> {
+    let display = name.to_string_lossy();
+    if display.is_empty() || display.contains('/') || display.contains('\\') {
+        return Err(Error::InvalidExtensionName {
+            name: display.into_owned(),
+        });
+    }
+    let mut executable = OsString::from("lantai-");
+    executable.push(name);
+    Ok(executable)
+}
+
+fn extension_status_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal().map_or(1, |signal| 128 + signal)
+    }
+    #[cfg(not(unix))]
+    {
+        1
     }
 }
 
