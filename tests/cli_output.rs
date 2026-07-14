@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use lantai::catalog::ItemView;
-use lantai::config::Config;
+use lantai::config::{Config, PostSaveHookConfig};
 use lantai::library::LibraryLayout;
 
 const ITEM_UUID: &str = "cc9e50c4-55ee-4471-b17c-c41684f64bf9";
@@ -122,4 +122,71 @@ fn human_format_remains_available_without_a_json_alias() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--json'"));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_post_save_hook_preserves_json_stdout_and_suppresses_nested_hooks() {
+    let directory = tempfile::tempdir().unwrap();
+    let bibliography = directory.path().join("references.bib");
+    let layout = LibraryLayout::new(bibliography.clone()).unwrap();
+    layout.initialize().unwrap();
+    std::fs::write(
+        &bibliography,
+        format!("@article{{rich,title={{Before}},lantaiid={{{ITEM_UUID}}}}}\n"),
+    )
+    .unwrap();
+    let event = directory.path().join("event.json");
+    let calls = directory.path().join("calls");
+    let config_path = directory.path().join("config.toml");
+    let mut config = Config::new(directory.path().join("not-the-selected-library.bib"));
+    config.post_save_hook = Some(PostSaveHookConfig {
+        command: "/bin/sh".to_owned(),
+        args: vec![
+            "-c".to_owned(),
+            concat!(
+                "cat > \"$1\"; ",
+                "\"$LANTAI\" --config \"$LANTAI_CONFIG\" ",
+                "tag add rich nested --json; ",
+                "printf x >> \"$2\""
+            )
+            .to_owned(),
+            "lantai-hook".to_owned(),
+            event.display().to_string(),
+            calls.display().to_string(),
+        ],
+        timeout_seconds: 30,
+    });
+    config.write(&config_path, false).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lantai"))
+        .arg("--config")
+        .arg(&config_path)
+        .args(["set", "rich", "title=Changed", "--json"])
+        .env("LANTAI_LIBRARY", &bibliography)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["uuid"], ITEM_UUID);
+    let hook_event: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(event).unwrap()).unwrap();
+    assert_eq!(hook_event["operation"], "item.update");
+    assert_eq!(hook_event["origin"], "cli");
+    assert_eq!(std::fs::read_to_string(calls).unwrap(), "x");
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_lantai"))
+        .arg("--config")
+        .arg(&config_path)
+        .args(["show", "rich"])
+        .env("LANTAI_LIBRARY", &bibliography)
+        .output()
+        .unwrap();
+    let shown: ItemView = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown.tags, ["nested"]);
 }

@@ -20,10 +20,15 @@ use tokio_util::io::ReaderStream;
 
 use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
 use crate::config::Config;
-use crate::library::{ItemPatch, LibraryLayout, LibraryStore, NewItem};
+use crate::hook::{
+    HookItems, HookOperation, HookOrigin, PostSaveHook, PreparedPostSaveHook, SUPPRESS_HOOK_HEADER,
+    revision,
+};
+use crate::library::{ItemPatch, LibraryLayout, LibraryStore, NewItem, RemovedItem};
 use crate::{Error, Result as LantaiResult};
 
 type ApiResult<T> = std::result::Result<T, ApiError>;
+const ORIGIN_HEADER: &str = "X-Lantai-Origin";
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -35,6 +40,7 @@ struct AppStateInner {
     layout: LibraryLayout,
     cache: RwLock<CacheSnapshot>,
     mutation: Mutex<()>,
+    hook: PostSaveHook,
 }
 
 #[derive(Clone)]
@@ -131,7 +137,11 @@ struct HealthResponse {
     disk_error: Option<String>,
 }
 
-pub async fn serve(config: Config, layout: LibraryLayout) -> LantaiResult<()> {
+pub async fn serve(
+    config: Config,
+    layout: LibraryLayout,
+    config_path: std::path::PathBuf,
+) -> LantaiResult<()> {
     let address =
         config
             .api_address
@@ -146,9 +156,10 @@ pub async fn serve(config: Config, layout: LibraryLayout) -> LantaiResult<()> {
         });
     }
 
+    let hook = PostSaveHook::new(config.post_save_hook.as_ref(), &config_path, layout.clone());
     let connector_config = config.clone();
     let connector_layout = layout.clone();
-    let state = AppState::new(config, layout)?;
+    let state = AppState::new_with_hook(config, layout, hook.clone())?;
     spawn_watcher(state.clone())?;
     let app = native_router(state);
     let listener = tokio::net::TcpListener::bind(address)
@@ -166,8 +177,11 @@ pub async fn serve(config: Config, layout: LibraryLayout) -> LantaiResult<()> {
                 source,
             })
     });
-    let mut connector_task =
-        tokio::spawn(crate::connector::serve(connector_config, connector_layout));
+    let mut connector_task = tokio::spawn(crate::connector::serve(
+        connector_config,
+        connector_layout,
+        hook,
+    ));
     let result = tokio::select! {
         result = &mut native_task => join_server(result, address.to_string()),
         result = &mut connector_task => join_server(result, CONNECTOR_ADDRESS_LABEL.to_owned()),
@@ -191,7 +205,21 @@ fn join_server(
 }
 
 impl AppState {
+    #[cfg(test)]
     pub(crate) fn new(config: Config, layout: LibraryLayout) -> LantaiResult<Self> {
+        let hook = PostSaveHook::new(
+            config.post_save_hook.as_ref(),
+            std::path::Path::new("config.toml"),
+            layout.clone(),
+        );
+        Self::new_with_hook(config, layout, hook)
+    }
+
+    fn new_with_hook(
+        config: Config,
+        layout: LibraryLayout,
+        hook: PostSaveHook,
+    ) -> LantaiResult<Self> {
         let source = layout.read_utf8()?;
         let catalog = Catalog::parse(&layout.bibliography, &source)?;
         if !catalog.is_syntactically_valid() {
@@ -213,6 +241,7 @@ impl AppState {
                 layout,
                 cache: RwLock::new(snapshot),
                 mutation: Mutex::new(()),
+                hook,
             }),
         })
     }
@@ -399,6 +428,7 @@ async fn create_item(
     Json(request): Json<CreateItemRequest>,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
     let added = run_blocking(move || {
@@ -412,6 +442,16 @@ async fn create_item(
     state.refresh().await;
     let snapshot = state.snapshot().await;
     let item = find_indexed_item(&snapshot.items, &added.uuid.to_string())?;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::ItemCreate,
+        HookItems::Uuids(vec![added.uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(
         StatusCode::CREATED,
         &ItemResponse {
@@ -429,6 +469,7 @@ async fn patch_item(
     Json(request): Json<PatchItemRequest>,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
     let result = run_blocking(move || {
@@ -447,6 +488,16 @@ async fn patch_item(
     state.refresh().await;
     let snapshot = state.snapshot().await;
     let item = find_indexed_item(&snapshot.items, &result.uuid.to_string())?;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::ItemUpdate,
+        HookItems::Uuids(vec![result.uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(
         StatusCode::OK,
         &ItemResponse {
@@ -463,13 +514,24 @@ async fn delete_item(
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
-    run_blocking(move || store.remove_item(&id)).await?;
+    let removed = run_blocking(move || store.remove_item(&id)).await?;
     state.refresh().await;
     let snapshot = state.snapshot().await;
     let mut response = StatusCode::NO_CONTENT.into_response();
     insert_etag(response.headers_mut(), &snapshot.revision);
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::ItemDelete,
+        HookItems::Uuids(Vec::new()),
+        vec![removed],
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(response)
 }
 
@@ -480,6 +542,7 @@ async fn upload_attachment(
     mut multipart: Multipart,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let limit = state.inner.config.attachment_limit_bytes;
     let mut upload = None;
@@ -594,6 +657,16 @@ async fn upload_attachment(
     .await?;
     state.refresh().await;
     let snapshot = state.snapshot().await;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::AttachmentCreate,
+        HookItems::Uuids(vec![attached.item_uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(
         StatusCode::CREATED,
         &attached,
@@ -637,11 +710,22 @@ async fn delete_attachment(
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
     let detached = run_blocking(move || store.detach_attachment(&id, attachment_id)).await?;
     state.refresh().await;
     let snapshot = state.snapshot().await;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::AttachmentDelete,
+        HookItems::Uuids(vec![detached.item_uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(StatusCode::OK, &detached, &snapshot.revision))
 }
 
@@ -679,11 +763,22 @@ async fn import_library(
     Json(request): Json<ImportRequest>,
 ) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
     let added = run_blocking(move || store.import_biblatex(&request.source)).await?;
     state.refresh().await;
     let snapshot = state.snapshot().await;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::ItemImport,
+        HookItems::Uuids(added.iter().map(|item| item.uuid).collect()),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(
         StatusCode::CREATED,
         &added,
@@ -693,11 +788,22 @@ async fn import_library(
 
 async fn format_library(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let _guard = state.inner.mutation.lock().await;
+    let before = state.snapshot().await.revision;
     require_current_revision(&state, &headers).await?;
     let store = state.store();
     let formatted = run_blocking(move || store.format()).await?;
     state.refresh().await;
     let snapshot = state.snapshot().await;
+    let prepared = prepare_hook(
+        &state,
+        &headers,
+        before,
+        HookOperation::LibraryFormat,
+        HookItems::All,
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(json_response(
         StatusCode::OK,
         &formatted,
@@ -756,6 +862,44 @@ async fn require_current_revision(state: &AppState, headers: &HeaderMap) -> ApiR
     }
 }
 
+fn prepare_hook(
+    state: &AppState,
+    headers: &HeaderMap,
+    before: String,
+    operation: HookOperation,
+    affected: HookItems,
+    removed: Vec<RemovedItem>,
+) -> Option<PreparedPostSaveHook> {
+    if headers
+        .get(SUPPRESS_HOOK_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "1")
+    {
+        return None;
+    }
+    let origin = if headers
+        .get(ORIGIN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("cli"))
+    {
+        HookOrigin::Cli
+    } else {
+        HookOrigin::Rest
+    };
+    state
+        .inner
+        .hook
+        .prepare(Some(before), operation, origin, affected, removed)
+}
+
+async fn run_prepared_hook(prepared: Option<PreparedPostSaveHook>) {
+    if let Some(prepared) = prepared
+        && let Err(error) = tokio::task::spawn_blocking(move || prepared.run()).await
+    {
+        eprintln!("warning: post-save hook task failed: {error}");
+    }
+}
+
 fn find_indexed_item(items: &[CatalogItem], id: &str) -> LantaiResult<CatalogItem> {
     let parsed_uuid = uuid::Uuid::parse_str(id).ok();
     let matches = items
@@ -807,10 +951,6 @@ fn insert_etag(headers: &mut HeaderMap, revision: &str) {
     if let Ok(value) = HeaderValue::from_str(&format!("\"{revision}\"")) {
         headers.insert(ETAG, value);
     }
-}
-
-fn revision(source: &str) -> String {
-    blake3::hash(source.as_bytes()).to_hex().to_string()
 }
 
 async fn run_blocking<T: Send + 'static>(
@@ -929,6 +1069,65 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_mutation_runs_cli_origin_hook_and_honors_suppression() {
+        let directory = tempfile::tempdir().unwrap();
+        let bibliography = directory.path().join("references.bib");
+        let event_path = directory.path().join("event.json");
+        let calls_path = directory.path().join("calls");
+        let layout = LibraryLayout::new(bibliography).unwrap();
+        layout.initialize().unwrap();
+        let mut config = Config::new(layout.bibliography.clone());
+        config.api_token = "test-token".to_owned();
+        config.post_save_hook = Some(crate::config::PostSaveHookConfig {
+            command: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "cat > \"$1\"; printf x >> \"$2\"".to_owned(),
+                "lantai-hook".to_owned(),
+                event_path.display().to_string(),
+                calls_path.display().to_string(),
+            ],
+            timeout_seconds: 30,
+        });
+        let app = native_router(AppState::new(config, layout).unwrap());
+
+        let health = app
+            .clone()
+            .oneshot(authorized("GET", "/api/v1/health", Body::empty()))
+            .await
+            .unwrap();
+        let etag = health.headers()[ETAG].to_str().unwrap().to_owned();
+        let body = json!({"type": "article", "fields": {"title": "Hooked"}}).to_string();
+        let mut create = authorized("POST", "/api/v1/items", Body::from(body.clone()));
+        create.headers_mut().insert(IF_MATCH, etag.parse().unwrap());
+        create
+            .headers_mut()
+            .insert(ORIGIN_HEADER, "cli".parse().unwrap());
+        let created = app.clone().oneshot(create).await.unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let next_etag = created.headers()[ETAG].to_str().unwrap().to_owned();
+        let event: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&event_path).unwrap()).unwrap();
+        assert_eq!(event["origin"], "cli");
+        assert_eq!(event["operation"], "item.create");
+        assert_eq!(event["items"][0]["title"], "Hooked");
+
+        let mut suppressed = authorized("POST", "/api/v1/items", Body::from(body));
+        suppressed
+            .headers_mut()
+            .insert(IF_MATCH, next_etag.parse().unwrap());
+        suppressed
+            .headers_mut()
+            .insert(SUPPRESS_HOOK_HEADER, "1".parse().unwrap());
+        assert_eq!(
+            app.oneshot(suppressed).await.unwrap().status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(std::fs::read_to_string(calls_path).unwrap(), "x");
+    }
 
     fn test_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();

@@ -11,6 +11,7 @@ use ureq::unversioned::multipart::{Form, Part};
 
 use crate::catalog::{CatalogItem, CheckReport, ItemView};
 use crate::config::Config;
+use crate::hook::{HOOK_ACTIVE_ENV, SUPPRESS_HOOK_HEADER};
 use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, MutationResult, TrashEntry,
 };
@@ -72,6 +73,7 @@ pub struct ApiClient {
     base: String,
     authorization: String,
     revision: String,
+    suppress_hook: bool,
 }
 
 impl ApiClient {
@@ -102,6 +104,7 @@ impl ApiClient {
             base: format!("http://{address}"),
             authorization: format!("Bearer {}", config.api_token),
             revision: String::new(),
+            suppress_hook: std::env::var_os(HOOK_ACTIVE_ENV).is_some(),
         };
         let response = match client
             .agent
@@ -187,6 +190,8 @@ impl ApiClient {
             self.agent
                 .post(self.url("/api/v1/items"))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .send_json(&request),
         )?;
@@ -202,6 +207,8 @@ impl ApiClient {
             self.agent
                 .post(self.url("/api/v1/import"))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .send_json(&ImportRequest { source }),
         )?;
@@ -216,6 +223,8 @@ impl ApiClient {
             self.agent
                 .patch(self.url(&path))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .send_json(patch),
         )?;
@@ -232,6 +241,8 @@ impl ApiClient {
             self.agent
                 .delete(self.url(&path))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .call(),
         )?;
@@ -275,6 +286,8 @@ impl ApiClient {
             self.agent
                 .post(self.url(&path))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .send(form),
         )?;
@@ -296,6 +309,8 @@ impl ApiClient {
             self.agent
                 .delete(self.url(&path))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .call(),
         )?;
@@ -319,6 +334,8 @@ impl ApiClient {
             self.agent
                 .delete(self.url("/api/v1/trash"))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .call(),
         )?;
@@ -361,6 +378,8 @@ impl ApiClient {
             self.agent
                 .post(self.url("/api/v1/format"))
                 .header(AUTHORIZATION, &self.authorization)
+                .header("X-Lantai-Origin", "cli")
+                .header(SUPPRESS_HOOK_HEADER, self.suppress_hook_value())
                 .header(IF_MATCH, self.if_match())
                 .send_empty(),
         )?;
@@ -458,6 +477,10 @@ impl ApiClient {
 
     fn if_match(&self) -> String {
         format!("\"{}\"", self.revision)
+    }
+
+    fn suppress_hook_value(&self) -> &'static str {
+        if self.suppress_hook { "1" } else { "0" }
     }
 
     fn adopt_revision(&mut self, revision: Option<String>) {

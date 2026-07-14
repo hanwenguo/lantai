@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::config::Config;
+use crate::hook::{HookItems, HookOperation, HookOrigin, PostSaveHook, PreparedPostSaveHook};
 use crate::library::{LibraryLayout, LibraryStore, NewItem};
 use crate::zotero::{ZoteroItem, map_item};
 use crate::{Error, Result as LantaiResult};
@@ -48,6 +49,7 @@ struct ConnectorStateInner {
     attachment_limit_bytes: u64,
     sessions: Mutex<HashMap<String, SaveSession>>,
     mutation: Mutex<()>,
+    hook: PostSaveHook,
 }
 
 #[derive(Clone)]
@@ -166,8 +168,8 @@ enum SessionTags {
     CommaSeparated(String),
 }
 
-pub async fn serve(config: Config, layout: LibraryLayout) -> LantaiResult<()> {
-    let state = ConnectorState::new(config.attachment_limit_bytes, layout);
+pub async fn serve(config: Config, layout: LibraryLayout, hook: PostSaveHook) -> LantaiResult<()> {
+    let state = ConnectorState::new_with_hook(config.attachment_limit_bytes, layout, hook);
     let listener = tokio::net::TcpListener::bind(CONNECTOR_ADDRESS)
         .await
         .map_err(|source| Error::Listen {
@@ -184,13 +186,24 @@ pub async fn serve(config: Config, layout: LibraryLayout) -> LantaiResult<()> {
 }
 
 impl ConnectorState {
+    #[cfg(test)]
     fn new(attachment_limit_bytes: u64, layout: LibraryLayout) -> Self {
+        let hook = PostSaveHook::new(None, Path::new("config.toml"), layout.clone());
+        Self::new_with_hook(attachment_limit_bytes, layout, hook)
+    }
+
+    fn new_with_hook(
+        attachment_limit_bytes: u64,
+        layout: LibraryLayout,
+        hook: PostSaveHook,
+    ) -> Self {
         Self {
             inner: Arc::new(ConnectorStateInner {
                 layout,
                 attachment_limit_bytes,
                 sessions: Mutex::new(HashMap::new()),
                 mutation: Mutex::new(()),
+                hook,
             }),
         }
     }
@@ -374,6 +387,7 @@ async fn save_items(
     }
 
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     let store = state.store();
     let created = run_blocking(move || {
         let mut created = Vec::new();
@@ -398,9 +412,19 @@ async fn save_items(
             return Err(ConnectorError::internal("SAVE_FAILED"));
         }
     };
+    let affected = created.iter().map(|(_, uuid)| *uuid).collect();
     state
         .finish_session(&request.session_id, created.into_iter().collect())
         .await;
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::ItemCreate,
+        HookOrigin::Connector,
+        HookItems::Uuids(affected),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(empty_response(StatusCode::CREATED, "application/json"))
 }
 
@@ -433,6 +457,7 @@ async fn save_attachment(
     let limit = state.inner.attachment_limit_bytes;
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     run_blocking(move || {
         store.attach_file_named(
             &parent.to_string(),
@@ -445,6 +470,15 @@ async fn save_attachment(
     })
     .await
     .map_err(|_| ConnectorError::internal("ATTACHMENT_SAVE_FAILED"))?;
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::AttachmentCreate,
+        HookOrigin::Connector,
+        HookItems::Uuids(vec![parent]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(StatusCode::CREATED.into_response())
 }
 
@@ -489,6 +523,7 @@ async fn save_standalone_attachment(
     let limit = state.inner.attachment_limit_bytes;
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     let created = run_blocking(move || {
         let item = store.add_item(NewItem {
             entry_type: "misc".to_owned(),
@@ -522,6 +557,15 @@ async fn save_standalone_attachment(
         items.insert(id, item_uuid);
     }
     state.finish_session(session_id, items).await;
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::ItemCreate,
+        HookOrigin::Connector,
+        HookItems::Uuids(vec![item_uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok((StatusCode::CREATED, Json(json!({ "canRecognize": false }))).into_response())
 }
 
@@ -543,6 +587,7 @@ async fn save_snapshot(
     let url = request.url.clone();
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     let created = run_blocking(move || {
         store.add_item(NewItem {
             entry_type: "online".to_owned(),
@@ -568,6 +613,15 @@ async fn save_snapshot(
             HashMap::from([(request.url, created.uuid)]),
         )
         .await;
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::ItemCreate,
+        HookOrigin::Connector,
+        HookItems::Uuids(vec![created.uuid]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(empty_response(StatusCode::CREATED, "application/json"))
 }
 
@@ -613,6 +667,7 @@ async fn save_single_file(
     let temporary = upload.snapshot;
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     run_blocking(move || {
         store.attach_file_named(
             &parent.to_string(),
@@ -625,6 +680,15 @@ async fn save_single_file(
     })
     .await
     .map_err(|_| ConnectorError::internal("ATTACHMENT_SAVE_FAILED"))?;
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::AttachmentCreate,
+        HookOrigin::Connector,
+        HookItems::Uuids(vec![parent]),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(StatusCode::CREATED.into_response())
 }
 
@@ -676,9 +740,11 @@ async fn update_session(
     let session = state.session(&request.session_id).await?;
     let previous = session.current_user_tags;
     let item_ids = session.items.values().copied().collect::<BTreeSet<_>>();
+    let affected = item_ids.iter().copied().collect::<Vec<_>>();
     let store = state.store();
     let replacement_for_write = replacement.clone();
     let _guard = state.inner.mutation.lock().await;
+    let before = before_hook(&state);
     run_blocking(move || {
         for item_id in item_ids {
             store.rebase_tags(&item_id.to_string(), &previous, &replacement_for_write)?;
@@ -696,6 +762,15 @@ async fn update_session(
     {
         session.current_user_tags = replacement;
     }
+    let prepared = state.inner.hook.prepare(
+        before,
+        HookOperation::ItemUpdate,
+        HookOrigin::Connector,
+        HookItems::Uuids(affected),
+        Vec::new(),
+    );
+    drop(_guard);
+    run_prepared_hook(prepared).await;
     Ok(Json(json!({})))
 }
 
@@ -1002,6 +1077,24 @@ async fn run_blocking<T: Send + 'static>(
         })?
 }
 
+fn before_hook(state: &ConnectorState) -> Option<String> {
+    match state.inner.hook.revision_before_save() {
+        Ok(revision) => revision,
+        Err(error) => {
+            eprintln!("warning: could not prepare post-save hook: {error}");
+            None
+        }
+    }
+}
+
+async fn run_prepared_hook(prepared: Option<PreparedPostSaveHook>) {
+    if let Some(prepared) = prepared
+        && let Err(error) = tokio::task::spawn_blocking(move || prepared.run()).await
+    {
+        eprintln!("warning: post-save hook task failed: {error}");
+    }
+}
+
 fn gc_sessions(sessions: &mut HashMap<String, SaveSession>) {
     let ttl = if sessions.len() >= 10 {
         BUSY_SESSION_TTL
@@ -1095,6 +1188,55 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn connector_save_runs_one_batched_hook_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let layout = LibraryLayout::new(directory.path().join("references.bib")).unwrap();
+        layout.initialize().unwrap();
+        let event_path = directory.path().join("event.json");
+        let config = crate::config::PostSaveHookConfig {
+            command: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "cat > \"$1\"".to_owned(),
+                "lantai-hook".to_owned(),
+                event_path.display().to_string(),
+            ],
+            timeout_seconds: 30,
+        };
+        let hook = PostSaveHook::new(
+            Some(&config),
+            &directory.path().join("config.toml"),
+            layout.clone(),
+        );
+        let state = ConnectorState::new_with_hook(1024 * 1024, layout, hook);
+        let app = connector_router(state);
+        let body = json!({
+            "sessionID": "hook-session",
+            "items": [
+                {"id": "one", "itemType": "book", "title": "One"},
+                {"id": "two", "itemType": "book", "title": "Two"}
+            ]
+        });
+
+        let response = app
+            .oneshot(request(
+                "POST",
+                "/connector/saveItems",
+                "application/json",
+                body.to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let event: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(event_path).unwrap()).unwrap();
+        assert_eq!(event["origin"], "connector");
+        assert_eq!(event["operation"], "item.create");
+        assert_eq!(event["items"].as_array().unwrap().len(), 2);
+    }
 
     fn test_state() -> (tempfile::TempDir, ConnectorState) {
         let directory = tempfile::tempdir().unwrap();

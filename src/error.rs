@@ -141,6 +141,9 @@ pub enum Error {
         source: toml::de::Error,
     },
 
+    #[error("invalid post-save hook configuration: {message}")]
+    InvalidPostSaveHook { message: String },
+
     #[error("failed to serialize configuration: {0}")]
     SerializeConfig(#[from] toml::ser::Error),
 
@@ -159,6 +162,31 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("failed to launch post-save hook {executable}: {source}")]
+    LaunchPostSaveHook {
+        executable: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write the post-save event: {source}")]
+    WritePostSaveHook {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to wait for the post-save hook: {source}")]
+    WaitPostSaveHook {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("post-save hook exited unsuccessfully{status_message}", status_message = status.map_or_else(|| "".to_owned(), |code| format!(" with status {code}")))]
+    PostSaveHookExit { status: Option<i32> },
+
+    #[error("post-save hook timed out after {seconds} seconds")]
+    PostSaveHookTimeout { seconds: u64 },
 
     #[error("failed to locate the current Lantai executable: {source}")]
     CurrentExecutable {

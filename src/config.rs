@@ -12,6 +12,17 @@ use crate::{Error, Result};
 pub const LIBRARY_ENV: &str = "LANTAI_LIBRARY";
 pub const DEFAULT_API_ADDRESS: &str = "127.0.0.1:23120";
 pub const DEFAULT_ATTACHMENT_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_POST_SAVE_HOOK_TIMEOUT_SECONDS: u64 = 30;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostSaveHookConfig {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default = "default_post_save_hook_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +33,8 @@ pub struct Config {
     pub api_address: String,
     pub api_token: String,
     pub attachment_limit_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_save_hook: Option<PostSaveHookConfig>,
 }
 
 impl Config {
@@ -32,6 +45,7 @@ impl Config {
             api_address: DEFAULT_API_ADDRESS.to_owned(),
             api_token: generate_token(),
             attachment_limit_bytes: DEFAULT_ATTACHMENT_LIMIT_BYTES,
+            post_save_hook: None,
         }
     }
 
@@ -41,13 +55,16 @@ impl Config {
             source,
         })?;
 
-        toml::from_str(&contents).map_err(|source| Error::ParseConfig {
+        let config: Self = toml::from_str(&contents).map_err(|source| Error::ParseConfig {
             path: path.to_owned(),
             source,
-        })
+        })?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn write(&self, path: &Path, force: bool) -> Result<()> {
+        self.validate()?;
         if path.exists() && !force {
             return Err(Error::ConfigAlreadyExists {
                 path: path.to_owned(),
@@ -76,6 +93,26 @@ impl Config {
         enforce_user_only_permissions(path)?;
         Ok(())
     }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(hook) = &self.post_save_hook {
+            if hook.command.trim().is_empty() {
+                return Err(Error::InvalidPostSaveHook {
+                    message: "command cannot be empty".to_owned(),
+                });
+            }
+            if hook.timeout_seconds == 0 {
+                return Err(Error::InvalidPostSaveHook {
+                    message: "timeout_seconds must be greater than zero".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+const fn default_post_save_hook_timeout_seconds() -> u64 {
+    DEFAULT_POST_SAVE_HOOK_TIMEOUT_SECONDS
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -159,6 +196,7 @@ mod tests {
         assert_eq!(first.api_address, DEFAULT_API_ADDRESS);
         assert_eq!(first.attachment_root, None);
         assert_eq!(first.attachment_limit_bytes, 512 * 1024 * 1024);
+        assert_eq!(first.post_save_hook, None);
         assert_eq!(first.api_token.len(), 64);
         assert_ne!(first.api_token, second.api_token);
     }
@@ -190,6 +228,57 @@ mod tests {
         .unwrap();
 
         assert_eq!(Config::load(&path).unwrap().attachment_root, None);
+        assert_eq!(Config::load(&path).unwrap().post_save_hook, None);
+    }
+
+    #[test]
+    fn post_save_hook_round_trips_and_defaults_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            concat!(
+                "library = \"/tmp/references.bib\"\n",
+                "api_address = \"127.0.0.1:23120\"\n",
+                "api_token = \"token\"\n",
+                "attachment_limit_bytes = 1024\n",
+                "[post_save_hook]\n",
+                "command = \"refresh-index\"\n",
+                "args = [\"--all\"]\n"
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        assert_eq!(
+            config.post_save_hook,
+            Some(PostSaveHookConfig {
+                command: "refresh-index".to_owned(),
+                args: vec!["--all".to_owned()],
+                timeout_seconds: 30,
+            })
+        );
+    }
+
+    #[test]
+    fn post_save_hook_rejects_empty_command_and_zero_timeout() {
+        let mut config = Config::new(PathBuf::from("references.bib"));
+        config.post_save_hook = Some(PostSaveHookConfig {
+            command: String::new(),
+            args: Vec::new(),
+            timeout_seconds: 30,
+        });
+        let path = tempfile::tempdir().unwrap().path().join("config.toml");
+        assert!(matches!(
+            config.write(&path, false),
+            Err(Error::InvalidPostSaveHook { .. })
+        ));
+        config.post_save_hook.as_mut().unwrap().command = "hook".to_owned();
+        config.post_save_hook.as_mut().unwrap().timeout_seconds = 0;
+        assert!(matches!(
+            config.write(&path, false),
+            Err(Error::InvalidPostSaveHook { .. })
+        ));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::config::{
     Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, LIBRARY_ENV, absolutize, default_config_path,
     resolve_library,
 };
+use crate::hook::{HookItems, HookOperation, HookOrigin, PostSaveHook};
 use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, LibraryLayout, LibraryStore,
     MutationResult, NewItem, RemovedItem, TrashEntry,
@@ -294,6 +295,7 @@ struct Backend {
     layout: LibraryLayout,
     attachment_limit_bytes: u64,
     mode: BackendMode,
+    hook: PostSaveHook,
 }
 
 enum BackendMode {
@@ -328,11 +330,39 @@ impl Backend {
             || BackendMode::Direct(LibraryStore::new(layout.clone())),
             BackendMode::Daemon,
         );
+        let hook = PostSaveHook::new(
+            config
+                .as_ref()
+                .and_then(|config| config.post_save_hook.as_ref()),
+            config_path,
+            layout.clone(),
+        );
         Ok(Self {
             layout,
             attachment_limit_bytes,
             mode,
+            hook,
         })
+    }
+
+    fn before_save(&self) -> Result<Option<String>> {
+        match self.mode {
+            BackendMode::Direct(_) => self.hook.revision_before_save(),
+            BackendMode::Daemon(_) => Ok(None),
+        }
+    }
+
+    fn after_save(
+        &self,
+        before: Option<String>,
+        operation: HookOperation,
+        affected: HookItems,
+        removed: Vec<RemovedItem>,
+    ) {
+        if matches!(self.mode, BackendMode::Direct(_)) {
+            self.hook
+                .emit(before, operation, HookOrigin::Cli, affected, removed);
+        }
     }
 
     fn health(&mut self) -> Result<ApiHealth> {
@@ -580,7 +610,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                     address: config.api_address.clone(),
                     source,
                 })?;
-            runtime.block_on(crate::server::serve(config, layout))
+            runtime.block_on(crate::server::serve(config, layout, config_path))
         }
         Command::List {
             query,
@@ -615,7 +645,14 @@ fn run_cli(cli: Cli) -> Result<()> {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             if let Some(from) = from {
                 let source = read_import_source(&from)?;
+                let before = backend.before_save()?;
                 let added = backend.import(&source)?;
+                backend.after_save(
+                    before,
+                    HookOperation::ItemImport,
+                    HookItems::Uuids(added.iter().map(|item| item.uuid).collect()),
+                    Vec::new(),
+                );
                 if output.json {
                     return print_json(&added);
                 }
@@ -628,11 +665,18 @@ fn run_cli(cli: Cli) -> Result<()> {
                 .into_iter()
                 .map(parse_field_argument)
                 .collect::<Result<Vec<_>>>()?;
+            let before = backend.before_save()?;
             let added = backend.add(NewItem {
                 entry_type: entry_type.expect("clap requires --type unless --from is present"),
                 citation_key: key,
                 fields,
             })?;
+            backend.after_save(
+                before,
+                HookOperation::ItemCreate,
+                HookItems::Uuids(vec![added.uuid]),
+                Vec::new(),
+            );
             if output.json {
                 print_json(&added)
             } else {
@@ -661,6 +705,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 .into_iter()
                 .map(parse_field_argument)
                 .collect::<Result<Vec<_>>>()?;
+            let before = backend.before_save()?;
             let result = backend.patch(
                 &id,
                 ItemPatch {
@@ -669,6 +714,12 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
+            backend.after_save(
+                before,
+                HookOperation::ItemUpdate,
+                HookItems::Uuids(vec![result.uuid]),
+                Vec::new(),
+            );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
         Command::SetRaw { id, fields, output } => {
@@ -677,6 +728,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 .into_iter()
                 .map(parse_field_argument)
                 .collect::<Result<Vec<_>>>()?;
+            let before = backend.before_save()?;
             let result = backend.patch(
                 &id,
                 ItemPatch {
@@ -684,10 +736,17 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
+            backend.after_save(
+                before,
+                HookOperation::ItemUpdate,
+                HookItems::Uuids(vec![result.uuid]),
+                Vec::new(),
+            );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
         Command::Unset { id, fields, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = backend.patch(
                 &id,
                 ItemPatch {
@@ -695,19 +754,39 @@ fn run_cli(cli: Cli) -> Result<()> {
                     ..ItemPatch::default()
                 },
             )?;
+            backend.after_save(
+                before,
+                HookOperation::ItemUpdate,
+                HookItems::Uuids(vec![result.uuid]),
+                Vec::new(),
+            );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
         Command::Tag { action, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = match action {
                 TagAction::Add { id, tags } => backend.change_tags(&id, &tags, true)?,
                 TagAction::Remove { id, tags } => backend.change_tags(&id, &tags, false)?,
             };
+            backend.after_save(
+                before,
+                HookOperation::ItemUpdate,
+                HookItems::Uuids(vec![result.uuid]),
+                Vec::new(),
+            );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
         Command::Remove { id, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = backend.remove(&id)?;
+            backend.after_save(
+                before,
+                HookOperation::ItemDelete,
+                HookItems::Uuids(Vec::new()),
+                vec![result.clone()],
+            );
             if output.json {
                 print_json(&result)
             } else {
@@ -721,7 +800,14 @@ fn run_cli(cli: Cli) -> Result<()> {
             output,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = backend.detach(&id, attachment_id)?;
+            backend.after_save(
+                before,
+                HookOperation::AttachmentDelete,
+                HookItems::Uuids(vec![result.item_uuid]),
+                Vec::new(),
+            );
             if output.json {
                 print_json(&result)
             } else {
@@ -765,7 +851,14 @@ fn run_cli(cli: Cli) -> Result<()> {
             output,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = backend.attach(&id, &file, title.as_deref(), media_type.as_deref())?;
+            backend.after_save(
+                before,
+                HookOperation::AttachmentCreate,
+                HookItems::Uuids(vec![result.item_uuid]),
+                Vec::new(),
+            );
             if output.json {
                 print_json(&result)
             } else {
@@ -783,7 +876,14 @@ fn run_cli(cli: Cli) -> Result<()> {
         }
         Command::Format { output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let before = backend.before_save()?;
             let result = backend.format()?;
+            backend.after_save(
+                before,
+                HookOperation::LibraryFormat,
+                HookItems::All,
+                Vec::new(),
+            );
             if output.json {
                 print_json(&result)
             } else {
@@ -1075,6 +1175,70 @@ fn print_check(report: &CheckReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn daemon_backed_cli_runs_one_cli_origin_hook() {
+        let directory = tempfile::tempdir().unwrap();
+        let bibliography = directory.path().join("references.bib");
+        let layout = LibraryLayout::new(bibliography.clone()).unwrap();
+        layout.initialize().unwrap();
+        let event_path = directory.path().join("event.json");
+        let calls_path = directory.path().join("calls");
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = probe.local_addr().unwrap();
+        drop(probe);
+        let config_path = directory.path().join("config.toml");
+        let mut config = Config::new(bibliography);
+        config.api_address = address.to_string();
+        config.post_save_hook = Some(crate::config::PostSaveHookConfig {
+            command: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "cat > \"$1\"; printf x >> \"$2\"".to_owned(),
+                "lantai-hook".to_owned(),
+                event_path.display().to_string(),
+                calls_path.display().to_string(),
+            ],
+            timeout_seconds: 30,
+        });
+        config.write(&config_path, false).unwrap();
+        let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+        let state = crate::server::AppState::new(config, layout).unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, crate::server::native_router(state))
+                .await
+                .unwrap()
+        });
+
+        let command_config = config_path.clone();
+        tokio::task::spawn_blocking(move || {
+            run_parsed(
+                Cli::try_parse_from([
+                    "lantai",
+                    "--config",
+                    command_config.to_str().unwrap(),
+                    "add",
+                    "--type",
+                    "article",
+                    "--field",
+                    "title=Daemon hook",
+                ])
+                .unwrap(),
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap();
+
+        server.abort();
+        let _ = server.await;
+        assert_eq!(std::fs::read_to_string(calls_path).unwrap(), "x");
+        let event: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(event_path).unwrap()).unwrap();
+        assert_eq!(event["origin"], "cli");
+        assert_eq!(event["operation"], "item.create");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn backend_uses_daemon_then_falls_back_to_the_same_library() {
