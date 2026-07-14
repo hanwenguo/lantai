@@ -1,8 +1,11 @@
 use std::env;
+#[cfg(target_os = "macos")]
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_os = "macos"))]
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -116,9 +119,37 @@ const fn default_post_save_hook_timeout_seconds() -> u64 {
 }
 
 pub fn default_config_path() -> Result<PathBuf> {
-    let dirs =
-        ProjectDirs::from("org", "lantai", "Lantai").ok_or(Error::ConfigDirectoryUnavailable)?;
-    Ok(dirs.config_dir().join("config.toml"))
+    #[cfg(target_os = "macos")]
+    {
+        macos_default_config_path(
+            env::var_os("XDG_CONFIG_HOME").as_deref(),
+            env::var_os("HOME").as_deref(),
+        )
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dirs = ProjectDirs::from("org", "lantai", "Lantai")
+            .ok_or(Error::ConfigDirectoryUnavailable)?;
+        Ok(dirs.config_dir().join("config.toml"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_default_config_path(
+    xdg_config_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Result<PathBuf> {
+    let directory = xdg_config_home
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|path| !path.is_empty())
+                .map(|path| Path::new(path).join(".config"))
+        })
+        .ok_or(Error::ConfigDirectoryUnavailable)?;
+
+    Ok(directory.join("lantai").join("config.toml"))
 }
 
 pub fn resolve_library(cli_library: Option<&Path>, config_path: &Path) -> Result<PathBuf> {
@@ -199,6 +230,28 @@ mod tests {
         assert_eq!(first.post_save_hook, None);
         assert_eq!(first.api_token.len(), 64);
         assert_ne!(first.api_token, second.api_token);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_default_config_path_uses_xdg_then_home_fallback() {
+        assert_eq!(
+            macos_default_config_path(
+                Some(OsStr::new("/tmp/xdg-config")),
+                Some(OsStr::new("/Users/example")),
+            )
+            .unwrap(),
+            PathBuf::from("/tmp/xdg-config/lantai/config.toml")
+        );
+        assert_eq!(
+            macos_default_config_path(Some(OsStr::new("")), Some(OsStr::new("/Users/example")),)
+                .unwrap(),
+            PathBuf::from("/Users/example/.config/lantai/config.toml")
+        );
+        assert!(matches!(
+            macos_default_config_path(None, None),
+            Err(Error::ConfigDirectoryUnavailable)
+        ));
     }
 
     #[test]

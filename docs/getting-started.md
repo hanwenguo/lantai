@@ -51,9 +51,11 @@ The human output prints all three selected paths. `init --json` returns:
 }
 ```
 
-The exact default configuration directory is platform-specific. Use the path
-printed by `init` rather than assuming a location. On Unix, Lantai creates the
-configuration with user-only permissions because it contains the API token.
+On macOS and XDG-based Unix systems, the default configuration path is
+`${XDG_CONFIG_HOME:-$HOME/.config}/lantai/config.toml`. Windows uses its
+platform configuration directory. Use the path printed by `init` when writing
+portable scripts. On Unix, Lantai creates the configuration with user-only
+permissions because it contains the API token.
 
 ## Select a library
 
