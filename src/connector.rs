@@ -26,6 +26,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::collections;
 use crate::config::Config;
 use crate::hook::{HookItems, HookOperation, HookOrigin, PostSaveHook, PreparedPostSaveHook};
 use crate::library::{LibraryLayout, LibraryStore, NewItem};
@@ -34,6 +35,7 @@ use crate::{Error, Result as LantaiResult};
 
 const CONNECTOR_ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 23119);
 const CONNECTOR_API_VERSION: &str = "3";
+const LIBRARY_NAME: &str = "Lantai";
 const SESSION_TTL: Duration = Duration::from_secs(10 * 60);
 const BUSY_SESSION_TTL: Duration = Duration::from_secs(60);
 
@@ -48,6 +50,12 @@ struct ConnectorStateInner {
     layout: LibraryLayout,
     attachment_limit_bytes: u64,
     sessions: Mutex<HashMap<String, SaveSession>>,
+    /// Tag applied to new captures, chosen from the Connector's save popup.
+    ///
+    /// Zotero saves into whatever collection its window has selected, falling
+    /// back to a remembered folder when closed. Lantai has no window, so the
+    /// daemon remembers the last chosen target for the life of the process.
+    selected_target: Mutex<Option<String>>,
     mutation: Mutex<()>,
     hook: PostSaveHook,
 }
@@ -202,6 +210,7 @@ impl ConnectorState {
                 layout,
                 attachment_limit_bytes,
                 sessions: Mutex::new(HashMap::new()),
+                selected_target: Mutex::new(None),
                 mutation: Mutex::new(()),
                 hook,
             }),
@@ -210,6 +219,29 @@ impl ConnectorState {
 
     fn store(&self) -> LibraryStore {
         LibraryStore::new(self.inner.layout.clone())
+    }
+
+    /// Every tag in the library, deduped and ordered.
+    async fn library_tags(&self) -> ConnectorResult<BTreeSet<String>> {
+        let layout = self.inner.layout.clone();
+        run_blocking(move || {
+            let source = layout.read_utf8()?;
+            let catalog = Catalog::parse(&layout.bibliography, &source)?;
+            Ok(catalog
+                .items()
+                .flat_map(|item| item.tags)
+                .collect::<BTreeSet<_>>())
+        })
+        .await
+        .map_err(|_| ConnectorError::internal("LIBRARY_READ_FAILED"))
+    }
+
+    async fn selected_target(&self) -> Option<String> {
+        self.inner.selected_target.lock().await.clone()
+    }
+
+    async fn set_selected_target(&self, path: Option<String>) {
+        *self.inner.selected_target.lock().await = path;
     }
 
     async fn reserve_session(&self, id: &str, action: SaveAction) -> ConnectorResult<()> {
@@ -233,9 +265,20 @@ impl ConnectorState {
         Ok(())
     }
 
-    async fn finish_session(&self, id: &str, items: HashMap<String, Uuid>) {
+    /// Record the items a save produced.
+    ///
+    /// `applied_tags` are the tags the save already wrote, so a later
+    /// `updateSession` rebases them away instead of leaving a stale target tag
+    /// behind when the user picks a different collection.
+    async fn finish_session(
+        &self,
+        id: &str,
+        items: HashMap<String, Uuid>,
+        applied_tags: Vec<String>,
+    ) {
         if let Some(session) = self.inner.sessions.lock().await.get_mut(id) {
             session.items = items;
+            session.current_user_tags = applied_tags;
         }
     }
 
@@ -364,10 +407,19 @@ async fn save_items(
     state
         .reserve_session(&request.session_id, SaveAction::Items)
         .await?;
+    // saveItems carries no target, so the capture lands in whichever collection
+    // the popup last selected. The popup only calls updateSession when the user
+    // changes something, so this cannot wait until then.
+    let collection = state.selected_target().await;
     let mapped = request
         .items
         .into_iter()
-        .map(map_item)
+        .map(|mut item| {
+            if let Some(collection) = &collection {
+                item.tags.push(JsonValue::String(collection.clone()));
+            }
+            map_item(item)
+        })
         .collect::<LantaiResult<Vec<_>>>()
         .map_err(|_| ConnectorError::bad_request("INVALID_ITEM"));
     let mapped = match mapped {
@@ -414,7 +466,11 @@ async fn save_items(
     };
     let affected = created.iter().map(|(_, uuid)| *uuid).collect();
     state
-        .finish_session(&request.session_id, created.into_iter().collect())
+        .finish_session(
+            &request.session_id,
+            created.into_iter().collect(),
+            collection.into_iter().collect(),
+        )
         .await;
     let prepared = state.inner.hook.prepare(
         before,
@@ -512,14 +568,18 @@ async fn save_standalone_attachment(
         title
     };
     let source_name = attachment_source_name(&metadata.url, &title, &content_type);
-    let fields = [
+    let collection = state.selected_target().await;
+    let mut fields = [
         ("title".to_owned(), title.clone()),
         ("url".to_owned(), metadata.url.clone()),
         ("zotero-item-type".to_owned(), "attachment".to_owned()),
     ]
     .into_iter()
     .filter(|(_, value)| !value.is_empty())
-    .collect();
+    .collect::<Vec<_>>();
+    if let Some(collection) = &collection {
+        fields.push(("keywords".to_owned(), collection.clone()));
+    }
     let limit = state.inner.attachment_limit_bytes;
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
@@ -556,7 +616,9 @@ async fn save_standalone_attachment(
     if let Some(id) = metadata.id {
         items.insert(id, item_uuid);
     }
-    state.finish_session(session_id, items).await;
+    state
+        .finish_session(session_id, items, collection.into_iter().collect())
+        .await;
     let prepared = state.inner.hook.prepare(
         before,
         HookOperation::ItemCreate,
@@ -585,6 +647,15 @@ async fn save_snapshot(
         request.title
     };
     let url = request.url.clone();
+    let collection = state.selected_target().await;
+    let mut fields = vec![
+        ("title".to_owned(), title),
+        ("url".to_owned(), url),
+        ("zotero-item-type".to_owned(), "webpage".to_owned()),
+    ];
+    if let Some(collection) = &collection {
+        fields.push(("keywords".to_owned(), collection.clone()));
+    }
     let store = state.store();
     let _guard = state.inner.mutation.lock().await;
     let before = before_hook(&state);
@@ -592,11 +663,7 @@ async fn save_snapshot(
         store.add_item(NewItem {
             entry_type: "online".to_owned(),
             citation_key: None,
-            fields: vec![
-                ("title".to_owned(), title),
-                ("url".to_owned(), url),
-                ("zotero-item-type".to_owned(), "webpage".to_owned()),
-            ],
+            fields,
         })
     })
     .await;
@@ -611,6 +678,7 @@ async fn save_snapshot(
         .finish_session(
             &request.session_id,
             HashMap::from([(request.url, created.uuid)]),
+            collection.into_iter().collect(),
         )
         .await;
     let prepared = state.inner.hook.prepare(
@@ -695,33 +763,49 @@ async fn save_single_file(
 async fn get_selected_collection(
     State(state): State<ConnectorState>,
 ) -> ConnectorResult<Json<JsonValue>> {
-    let layout = state.inner.layout.clone();
-    let tags = run_blocking(move || {
-        let source = layout.read_utf8()?;
-        let catalog = Catalog::parse(&layout.bibliography, &source)?;
-        Ok(catalog
-            .items()
-            .flat_map(|item| item.tags)
-            .collect::<BTreeSet<_>>())
-    })
-    .await
-    .map_err(|_| ConnectorError::internal("LIBRARY_READ_FAILED"))?;
+    let tags = state.library_tags().await?;
+    let selected = state.selected_target().await;
+    let collections = collections::tree(tags.iter().cloned());
+
+    // The popup preselects this row and offers recent targets first.
+    let current = selected
+        .as_deref()
+        .and_then(|path| collections.iter().find(|target| target.path == path));
+    let mut targets = vec![json!({
+        "id": collections::LIBRARY_TARGET,
+        "name": LIBRARY_NAME,
+        "filesEditable": true,
+        "level": 0,
+    })];
+    targets.extend(collections.iter().map(|target| {
+        let mut row = json!({
+            "id": target.id,
+            "name": target.name,
+            "filesEditable": true,
+            "level": target.level,
+        });
+        if current.is_some_and(|current| current.id == target.id) {
+            row["recent"] = JsonValue::Bool(true);
+        }
+        row
+    }));
+
     let tags = tags
         .into_iter()
         .map(|tag| json!({ "tag": tag, "type": 0 }))
         .collect::<Vec<_>>();
     Ok(Json(json!({
         "libraryID": 1,
-        "libraryName": "Lantai",
+        "libraryName": LIBRARY_NAME,
         "libraryEditable": true,
         "filesEditable": true,
         "editable": true,
-        "id": null,
-        "name": "Lantai",
-        "targets": [
-            {"id": "L1", "name": "Lantai", "filesEditable": true, "level": 0}
-        ],
-        "tags": {"L1": tags}
+        "id": current.map(|target| target.id.clone()),
+        "name": current.map_or(LIBRARY_NAME, |target| target.name.as_str()),
+        "targets": targets,
+        // Keyed by library: the popup resolves a collection to its root target
+        // before looking up the tag list for autocomplete.
+        "tags": {collections::LIBRARY_TARGET: tags}
     })))
 }
 
@@ -730,13 +814,28 @@ async fn update_session(
     body: Bytes,
 ) -> ConnectorResult<Json<JsonValue>> {
     let request: UpdateSessionRequest = parse_json(&body)?;
-    if request.target != "L1" {
-        return Err(ConnectorError::bad_request("TARGET_NOT_FOUND"));
-    }
     if !request.note.trim().is_empty() {
         return Err(ConnectorError::bad_request("NOTES_NOT_SUPPORTED"));
     }
-    let replacement = normalize_session_tags(request.tags);
+    // The library root files an item under no collection at all; any other
+    // target names a tag, which the popup's own tags then join.
+    let collection = if request.target == collections::LIBRARY_TARGET {
+        None
+    } else {
+        let tags = state.library_tags().await?;
+        Some(
+            collections::resolve(tags, &request.target)
+                .ok_or_else(|| ConnectorError::bad_request("TARGET_NOT_FOUND"))?,
+        )
+    };
+    let mut replacement = normalize_session_tags(request.tags);
+    if let Some(collection) = &collection
+        && !replacement
+            .iter()
+            .any(|tag| tag.eq_ignore_ascii_case(collection))
+    {
+        replacement.push(collection.clone());
+    }
     let session = state.session(&request.session_id).await?;
     let previous = session.current_user_tags;
     let item_ids = session.items.values().copied().collect::<BTreeSet<_>>();
@@ -762,6 +861,7 @@ async fn update_session(
     {
         session.current_user_tags = replacement;
     }
+    state.set_selected_target(collection).await;
     let prepared = state.inner.hook.prepare(
         before,
         HookOperation::ItemUpdate,
@@ -1481,6 +1581,249 @@ mod tests {
         let body = to_bytes(target.into_body(), usize::MAX).await.unwrap();
         let body: JsonValue = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["targets"][0]["id"], "L1");
+    }
+
+    /// A library whose tags form a nested collection tree.
+    fn tagged_state() -> (tempfile::TempDir, ConnectorState) {
+        let (directory, state) = test_state();
+        std::fs::write(
+            &state.inner.layout.bibliography,
+            concat!(
+                "@book{seed,\n",
+                "  title = {Seed},\n",
+                "  keywords = {Inbox, Projects/IfT, ResearchTopics/Subtyping/Semantic},\n",
+                "  lantaiid = {cc9e50c4-55ee-4471-b17c-c41684f64bf9}\n",
+                "}\n"
+            ),
+        )
+        .unwrap();
+        (directory, state)
+    }
+
+    async fn selected_collection(app: &Router) -> JsonValue {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/connector/getSelectedCollection",
+                "application/json",
+                "{}",
+            ))
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn save_one(app: &Router, session: &str, title: &str) -> StatusCode {
+        let body = json!({
+            "sessionID": session,
+            "items": [{"id": "one", "itemType": "book", "title": title}]
+        })
+        .to_string();
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/connector/saveItems",
+                "application/json",
+                body,
+            ))
+            .await
+            .unwrap()
+            .status()
+    }
+
+    async fn retarget(app: &Router, session: &str, target: &str, tags: JsonValue) -> StatusCode {
+        let body = json!({
+            "sessionID": session,
+            "target": target,
+            "tags": tags,
+            "note": ""
+        })
+        .to_string();
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/connector/updateSession",
+                "application/json",
+                body,
+            ))
+            .await
+            .unwrap()
+            .status()
+    }
+
+    fn tags_of(state: &ConnectorState, title: &str) -> Vec<String> {
+        let source = state.inner.layout.read_utf8().unwrap();
+        let catalog = Catalog::parse(&state.inner.layout.bibliography, &source).unwrap();
+        catalog
+            .views()
+            .find(|item| item.title.as_deref() == Some(title))
+            .unwrap_or_else(|| panic!("no item titled {title}"))
+            .tags
+    }
+
+    #[tokio::test]
+    async fn tags_are_offered_as_a_nested_collection_tree() {
+        let (_directory, state) = tagged_state();
+        let app = connector_router(state);
+
+        let body = selected_collection(&app).await;
+        let rows = body["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap(),
+                    row["level"].as_u64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                ("Lantai", 0),
+                ("Inbox", 1),
+                // Neither parent is a tag; both are synthesized so the popup can
+                // find each row's parent by scanning back one level.
+                ("Projects", 1),
+                ("IfT", 2),
+                ("ResearchTopics", 1),
+                ("Subtyping", 2),
+                ("Semantic", 3),
+            ]
+        );
+        assert!(
+            body["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["filesEditable"] == true),
+            "the popup drops targets without filesEditable"
+        );
+        assert_eq!(body["id"], JsonValue::Null);
+        assert_eq!(body["name"], "Lantai");
+        assert_eq!(body["tags"]["L1"][0]["tag"], "Inbox");
+    }
+
+    #[tokio::test]
+    async fn choosing_a_collection_tags_the_session_and_retargeting_moves_it() {
+        let (_directory, state) = tagged_state();
+        let app = connector_router(state.clone());
+        let targets = selected_collection(&app).await;
+        let id = |name: &str| {
+            targets["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == name)
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+
+        assert_eq!(save_one(&app, "s1", "Filed").await, StatusCode::CREATED);
+        assert_eq!(
+            retarget(&app, "s1", &id("IfT"), json!(["manual"])).await,
+            StatusCode::OK
+        );
+        assert_eq!(tags_of(&state, "Filed"), ["manual", "Projects/IfT"]);
+
+        // Switching targets moves the item rather than accumulating memberships.
+        assert_eq!(
+            retarget(&app, "s1", &id("Semantic"), json!(["manual"])).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            tags_of(&state, "Filed"),
+            ["manual", "ResearchTopics/Subtyping/Semantic"]
+        );
+
+        // The library root files the item under no collection.
+        assert_eq!(
+            retarget(&app, "s1", "L1", json!(["manual"])).await,
+            StatusCode::OK
+        );
+        assert_eq!(tags_of(&state, "Filed"), ["manual"]);
+    }
+
+    #[tokio::test]
+    async fn the_chosen_collection_is_remembered_for_the_next_capture() {
+        let (_directory, state) = tagged_state();
+        let app = connector_router(state.clone());
+        let targets = selected_collection(&app).await;
+        let inbox = targets["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "Inbox")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        assert_eq!(save_one(&app, "s1", "First").await, StatusCode::CREATED);
+        assert_eq!(
+            retarget(&app, "s1", &inbox, json!([])).await,
+            StatusCode::OK
+        );
+
+        // The popup now preselects Inbox and marks it recent.
+        let body = selected_collection(&app).await;
+        assert_eq!(body["id"], JsonValue::String(inbox.clone()));
+        assert_eq!(body["name"], "Inbox");
+        let inbox_row = body["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == JsonValue::String(inbox.clone()))
+            .unwrap()
+            .clone();
+        assert_eq!(inbox_row["recent"], true);
+
+        // A later capture lands there without any popup interaction, which is
+        // the only chance to apply it: updateSession fires only on user edits.
+        assert_eq!(save_one(&app, "s2", "Second").await, StatusCode::CREATED);
+        assert_eq!(tags_of(&state, "Second"), ["Inbox"]);
+
+        // A snapshot save takes the remembered target too.
+        let page = json!({
+            "sessionID": "s3",
+            "url": "https://example.com/page",
+            "title": "Page"
+        })
+        .to_string();
+        let saved = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/connector/saveSnapshot",
+                "application/json",
+                page,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        assert_eq!(tags_of(&state, "Page"), ["Inbox"]);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_target_is_rejected() {
+        let (_directory, state) = tagged_state();
+        let app = connector_router(state.clone());
+        assert_eq!(save_one(&app, "s1", "Filed").await, StatusCode::CREATED);
+
+        assert_eq!(
+            retarget(&app, "s1", "C1", json!([])).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            retarget(&app, "s1", "not-a-target", json!([])).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert!(tags_of(&state, "Filed").is_empty());
     }
 
     #[tokio::test]

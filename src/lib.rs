@@ -2,6 +2,7 @@ pub mod attachments;
 pub mod catalog;
 pub mod cli;
 pub mod client;
+pub mod collections;
 pub mod config;
 pub mod connector;
 pub mod error;

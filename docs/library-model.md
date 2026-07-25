@@ -111,6 +111,13 @@ ordinary tags with no special handling; rename or remove them with
 `lantai tag`. Because `keywords` separates tags with commas, a comma in a
 Zotero collection name becomes a space.
 
+The Zotero Connector's save popup reads the same tags back as its collection
+picker, nesting on `/`, so choosing a collection there simply applies that tag
+path; see
+[collections in the save popup](zotero-connector.md#collections-in-the-save-popup).
+The storage model is unchanged: there is one flat, case-insensitively matched
+tag namespace, and a `/` only affects how the popup groups it.
+
 ## Attachments
 
 A default managed attachment is stored under:

@@ -27,7 +27,7 @@ The binary provides:
 - CLI bibliography CRUD, search, attachment management, validation, formatting, and export
 - Safe coexistence with external `.bib` editing
 
-One library with tags is supported. Collections, notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope. Importing a Zotero RDF export flattens collection membership into path-style tags instead of introducing a collection model, and drops notes.
+One library with tags is supported. Collections, notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope. Importing a Zotero RDF export flattens collection membership into path-style tags instead of introducing a collection model, and drops notes. The Connector's collection picker reads those tags back as a tree, so collections exist as a view rather than as stored state.
 
 ## Implementation
 
@@ -104,7 +104,7 @@ Implement:
 
 `ping` advertises attachment upload, snapshots, associated-file download, and tag autocomplete; it advertises no notes, translator hashes, cloud features, or recognition. Standalone saves return `canRecognize: false`; attachment resolver checks return `false`; sync delay is a no-op.
 
-Expose one Connector target, `L1`, named “Lantai”. `updateSession` accepts only `L1`, rebases tag changes onto current entries, and rejects nonempty notes.
+Expose the library root as Connector target `L1`, named “Lantai”, and derive the remaining save targets from the library's tags so the popup's collection picker works without a stored collection model. Nest on `/`, synthesizing ancestors the Connector needs to resolve a row's parent, and identify a target by hashing its path so it survives an unrelated tag appearing while the popup is open. `updateSession` resolves a target back to its tag, folds it into the tag rebase so retargeting moves rather than accumulates, and rejects nonempty notes. Because `saveItems` carries no target and the popup only calls `updateSession` on user edits, the daemon remembers the last chosen target for the life of the process and applies it to new captures, mirroring Zotero's own selected-collection behavior.
 
 Keep Connector save sessions in memory for ten minutes. Sessions map transient Connector item IDs to Lantai UUIDs and support subsequent binary and SingleFile attachment uploads.
 
@@ -177,7 +177,7 @@ must be exposed as an explicit operation.
 - Test external edits to managed and raw fields, watcher reloads, concurrent hash conflicts, malformed-file degraded mode, and atomic-write recovery.
 - Test attachment streaming, filename sanitization, external references, detach/delete trash behavior, missing files, and interrupted temporary uploads.
 - Add protocol contract tests for all implemented Connector endpoints, headers, session mapping, binary uploads, SingleFile snapshots, target/tag updates, and browser-request rejection.
-- Run an end-to-end acceptance test with the unpacked official Connector: capture a translated article with PDF, save a plain webpage with SingleFile snapshot, save a directly viewed PDF, and change tags in the progress popup.
+- Run an end-to-end acceptance test with the unpacked official Connector: capture a translated article with PDF, save a plain webpage with SingleFile snapshot, save a directly viewed PDF, and change tags and the target collection in the progress popup.
 - Test CLI direct fallback and daemon-backed operation against the same temporary bibliography, ensuring identical output and conflict behavior.
 
 ## Completion criteria

@@ -14,8 +14,9 @@ Zotero Connector built from commit `e168391` has been acceptance-tested with:
 
 - an arXiv translated item, PDF, and SingleFile HTML snapshot;
 - a plain webpage and SingleFile snapshot;
-- a directly viewed standalone PDF; and
-- progress-popup tag changes.
+- a directly viewed standalone PDF;
+- progress-popup tag changes; and
+- choosing a collection in the progress popup.
 
 The protocol implementation is intended to work with other current official
 Connector builds, but only that snapshot and matrix are a recorded acceptance
@@ -53,16 +54,36 @@ A translated capture normally arrives in stages:
    session.
 2. `saveAttachment` uploads fetched PDFs or other child files.
 3. `saveSingleFile` may upload a browser-generated HTML snapshot.
-4. The popup queries Lantai's single target and may send tag changes.
+4. The popup queries Lantai's save targets and may send collection or tag
+   changes.
 
 A plain webpage uses a webpage parent plus SingleFile snapshot. A directly
 viewed file uses the standalone-attachment flow. Sessions are short-lived and
 in memory; restarting Lantai during a capture loses the session, not already
 committed items.
 
-Lantai exposes one target named `Lantai`. It supports tags and files but not
-collections, notes, recognition, attachment resolvers, cloud sync, or Zotero's
-word-processor integration. A nonempty popup note is rejected.
+Lantai supports tags and files but not notes, recognition, attachment
+resolvers, cloud sync, or Zotero's word-processor integration. A nonempty popup
+note is rejected.
+
+### Collections in the save popup
+
+Lantai has no collection model, so the popup's collection picker is a view over
+the library's tags. Under the `Lantai` root it lists every tag, nesting any tag
+that contains `/`: `Projects/IfT` appears as `IfT` inside `Projects`. Parents
+are shown even when nothing carries that exact tag, which is what an imported
+Zotero library usually looks like.
+
+Choosing a collection tags the captured item with that full path, and switching
+to another moves the item rather than adding a second membership. Choosing the
+`Lantai` root files it under no collection. See [tags](library-model.md#tags).
+
+The daemon remembers the last collection you chose and applies it to later
+captures without further clicks, the way Zotero saves into whichever collection
+its window has selected. That memory lives in the running process only, so
+restarting `lantai serve` returns to the library root. Nothing else creates
+collections: a target exists once some item carries the tag, so use
+`lantai tag add` or an import to introduce one.
 
 Browser capture can generate several [post-save hook](post-save-hooks.md)
 events: initial items, each later file request, and a tag update are separate
@@ -94,11 +115,18 @@ the local listener before retrying if the item must be saved to Lantai.
   a second Open Access lookup.
 - Run `lantai check` for missing or orphaned managed files.
 
-### Popup tags fail
+### Popup tags or collections fail
 
-The target must be Lantai's single `L1` target. The save session must still
-exist, and notes must be empty. Restarting the daemon between item save and tag
-submission invalidates the session.
+The target must be the `Lantai` root or a collection derived from a tag that
+still exists; a tag removed while the popup was open no longer resolves. The
+save session must still exist, and notes must be empty. Restarting the daemon
+between item save and tag submission invalidates the session.
+
+### The collection picker is empty
+
+The picker is built from the library's tags, so a library with no tags shows
+only the `Lantai` root. Add a tag with `lantai tag add`, or import a Zotero
+library with `lantai import`, and reopen the popup.
 
 ### Zotero starts instead of Lantai
 

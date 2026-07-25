@@ -313,6 +313,15 @@ That request waits for recognition to finish. It returns `200` with `{"title":".
 
 Target IDs are desktop UI identifiers: `L<number>` for a library and `C<number>` for a collection. A headless implementation can expose one `L1` root plus its configured collections.
 
+Four details of this response matter to any implementation that returns more than one target. They were confirmed against the Connector sources at commit `e168391`:
+
+- `targets` is a flat, depth-first array in which depth is carried only by `level`, and each `name` is a leaf name rather than a path. The popup finds a row's parent by scanning *backwards* for the first row at `level - 1` (`getParent`, `ui/ProgressWindow.jsx`), so every intermediate ancestor must be present and a parent must immediately precede its children. A missing ancestor silently corrupts the tree.
+- Every target needs `filesEditable`. The popup drops targets without it whenever the current library is files-editable (`inject/progressWindow_inject.js`). The top-level `filesEditable` separately gates whether the Connector uploads attachments at all (`common/itemSaver.js`).
+- `tags` only needs the library key. `onTargetChange` walks a target up to its level-0 ancestor and looks up the tag list under that ID, so per-collection entries are never read.
+- The Connector classifies a target purely by `id.startsWith('L')`; only the desktop's own `updateSession` parses the numeric remainder. An implementation serving its own endpoint may therefore use any collection ID that does not begin with `L`, though matching `C<number>` stays closest to upstream.
+
+`saveItems` carries no target. The desktop derives one from the collection its window has selected, falling back to the `lastViewedFolder` preference when no window is open (`getSaveTarget`, `server_connector.js`), and `saveItems` then calls `session.update(targetID)` itself. The popup only issues `updateSession` when the user actually changes something, so a headless implementation that applies the target solely on `updateSession` will silently drop it for every capture the user does not touch. Remembering the last chosen target and applying it at save time is the faithful equivalent.
+
 The progress popup applies later changes with:
 
 ```http
