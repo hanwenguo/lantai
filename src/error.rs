@@ -46,6 +46,12 @@ pub enum Error {
     #[error("bibliography {path} is degraded and cannot be changed: {message}")]
     DegradedBibliography { path: PathBuf, message: String },
 
+    #[error("failed to parse Zotero RDF {path}: {message}")]
+    ParseZoteroRdf { path: PathBuf, message: String },
+
+    #[error("Zotero RDF export {path} contains no items")]
+    ZoteroRdfHasNoItems { path: PathBuf },
+
     #[error("item not found: {id}")]
     ItemNotFound { id: String },
 

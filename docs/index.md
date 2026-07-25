@@ -26,9 +26,11 @@ endpoint.
 
 Lantai supports a single library with items, tags, and attachments. It does not
 provide collections, notes, a reader, cloud sync, word-processor integration,
-formatted citations, metadata recognition, or automatic deduplication. The
-servers are local-only. Official extension scripts target Bash-capable macOS
-and Linux environments, although the Rust core is not intentionally Unix-only.
+formatted citations, metadata recognition, or automatic deduplication. A Zotero
+RDF import flattens collection membership into tags rather than modelling
+collections, and does not import notes. The servers are local-only. Official
+extension scripts target Bash-capable macOS and Linux environments, although
+the Rust core is not intentionally Unix-only.
 
 ## Developer references
 

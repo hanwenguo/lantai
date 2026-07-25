@@ -110,6 +110,40 @@ missing UUIDs; duplicate UUIDs or citation keys reject the complete import.
 JSON creation output is `{ "uuid": ..., "citation_key": ... }`; import output
 is an array of those records.
 
+### `import`
+
+```text
+lantai import FILE [--attachment-base PATH] [--dry-run] [--json]
+```
+
+Imports a Zotero RDF export. `FILE` is the exported `.rdf` document; attachment
+files are read from the `files/` directory Zotero writes beside it, so export
+with **Export Files** enabled. Zotero RDF is the only built-in Zotero format
+that carries collections, attachment files, and citation keys together.
+
+Each Zotero item becomes one entry, using the same item-type and field mapping
+as the Connector. Collection membership becomes path-style tags such as
+`Projects/Engines`, since Lantai has no collection model; a comma in a
+collection name becomes a space. `<z:citationKey>` values are reused, falling
+back to a generated `AuthorYearTitle` key when the key is already taken or
+Lantai rejects it. Zotero's own tags and its notes are not imported. Zotero
+writes `dc:date` in its application locale, so dates are converted to ISO 8601,
+narrowing to the year alone when the month cannot be recognized.
+
+Attachment files are copied into managed storage, so the export directory can
+be deleted afterwards. `--attachment-base PATH` resolves linked files that
+Zotero recorded against its linked attachment base directory rather than
+copying into the export.
+
+A rejected item rolls the whole import back. A file that cannot be copied is
+reported instead of aborting, and can be attached later with `attach`.
+`--dry-run` reports what would be imported and writes nothing.
+
+JSON output is `{ "imported": ..., "attachments": ..., "collections": [...],
+"items": [{ "uuid": ..., "citation_key": ... }], "skipped_attachments":
+[{ "item": ..., "title": ..., "reason": ... }] }`. `items` is empty for
+`--dry-run`.
+
 ### `set`
 
 ```text

@@ -81,7 +81,7 @@ Formatting includes all current items. Removal has no current item and uses
 | Operation | Trigger | Item selection |
 | --- | --- | --- |
 | `item.create` | CLI/REST create; Connector item, webpage, or standalone save | Created items |
-| `item.import` | CLI/REST BibLaTeX import | All imported items |
+| `item.import` | CLI/REST BibLaTeX import; CLI Zotero RDF import | All imported items |
 | `item.update` | Field, key, tag, or Connector popup tag change | Updated items |
 | `item.delete` | Item removal | Tombstone in `removed_items` |
 | `attachment.create` | CLI/REST attach or Connector child/snapshot upload | Parent item after attachment |

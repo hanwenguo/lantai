@@ -10,5 +10,6 @@ pub mod keys;
 pub mod library;
 pub mod server;
 pub mod zotero;
+pub mod zotero_rdf;
 
 pub use error::{Error, Result};

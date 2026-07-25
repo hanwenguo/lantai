@@ -27,7 +27,7 @@ The binary provides:
 - CLI bibliography CRUD, search, attachment management, validation, formatting, and export
 - Safe coexistence with external `.bib` editing
 
-One library with tags is supported. Collections, notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope.
+One library with tags is supported. Collections, notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope. Importing a Zotero RDF export flattens collection membership into path-style tags instead of introducing a collection model, and drops notes.
 
 ## Implementation
 
@@ -52,6 +52,7 @@ One library with tags is supported. Collections, notes, readers, Word integratio
 - Normalize most bibliographic fields after external edits. Preserve exact raw value expressions for `abstract`, `annotation`, `note`, and unknown/custom fields. Preserve comments, `@string`, and `@preamble` blocks in source order.
 - An explicit CLI/REST update to a raw field replaces its expression; unrelated writes retain it exactly.
 - Adapt Zotero’s BibLaTeX type/field mapping for every Connector item type. Preserve otherwise unmapped scalar Zotero fields as managed `zotero-*` custom fields rather than silently dropping them.
+- Reuse that mapping for Zotero RDF import by translating RDF into the same Connector item shape, rather than maintaining a second field table. Read container-level identifiers, since Zotero records a conference paper’s DOI and ISBN on the proceedings rather than the item, and rewrite the locale-rendered `dc:date` as ISO 8601.
 - Store tags in normalized `keywords`: trim, remove exact duplicates, preserve spelling/case, and sort case-insensitively.
 - Allow duplicate bibliographic records. Enforce UUID and citation-key
   uniqueness for Lantai-created mutations, but retain duplicate keys introduced
@@ -138,6 +139,7 @@ Provide:
 - `init`, `serve`, `health`
 - `list`, `show`
 - `add --from <file|->` or `add --type … --field name=value`
+- `import <file.rdf>` for Zotero RDF exports, including files and collections
 - `set`, `set-raw`, `unset`, `tag add`, `tag remove`
 - `remove`, `attach`, `detach`
 - `export`, `format`, `check`

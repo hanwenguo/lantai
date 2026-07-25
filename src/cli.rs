@@ -19,6 +19,8 @@ use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, LibraryLayout, LibraryStore,
     MutationResult, NewItem, RemovedItem, TrashEntry,
 };
+use crate::zotero::map_item;
+use crate::zotero_rdf::{RdfImport, SkippedAttachment};
 use crate::{Error, Result};
 
 #[derive(Debug, Parser)]
@@ -104,6 +106,23 @@ enum Command {
         /// Import one or more BibLaTeX entries from a file, or use - for standard input.
         #[arg(long, value_name = "FILE")]
         from: Option<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
+    },
+
+    /// Import a Zotero RDF export, including its files and collections.
+    Import {
+        /// The exported .rdf document. Attachment files are read beside it.
+        file: PathBuf,
+
+        /// Resolve linked files against Zotero's attachment base directory.
+        #[arg(long, value_name = "PATH")]
+        attachment_base: Option<PathBuf>,
+
+        /// Report what would be imported without changing the library.
+        #[arg(long)]
+        dry_run: bool,
 
         #[command(flatten)]
         output: JsonOutput,
@@ -684,6 +703,30 @@ fn run_cli(cli: Cli) -> Result<()> {
                 Ok(())
             }
         }
+        Command::Import {
+            file,
+            attachment_base,
+            dry_run,
+            output,
+        } => {
+            let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let source = std::fs::read_to_string(&file).map_err(|source| Error::Read {
+                path: file.clone(),
+                source,
+            })?;
+            let import = crate::zotero_rdf::parse(&file, &source, attachment_base.as_deref())?;
+            let summary = if dry_run {
+                ImportSummary::preview(&import)
+            } else {
+                run_import(&mut backend, import)?
+            };
+            if output.json {
+                print_json(&summary)
+            } else {
+                print_import(&summary, dry_run);
+                Ok(())
+            }
+        }
         Command::Show { id, format } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let item = backend.get(&id)?;
@@ -1069,6 +1112,126 @@ fn parse_field_argument(argument: String) -> Result<(String, String)> {
         return Err(Error::EmptyFieldName);
     }
     Ok((name.to_owned(), value.to_owned()))
+}
+
+#[derive(Debug, Serialize)]
+struct ImportSummary {
+    imported: usize,
+    attachments: usize,
+    collections: Vec<String>,
+    items: Vec<AddedItem>,
+    skipped_attachments: Vec<SkippedAttachment>,
+}
+
+impl ImportSummary {
+    fn preview(import: &RdfImport) -> Self {
+        Self {
+            imported: import.items.len(),
+            attachments: import.items.iter().map(|item| item.attachments.len()).sum(),
+            collections: import.collections.clone(),
+            items: Vec::new(),
+            skipped_attachments: import.skipped.clone(),
+        }
+    }
+}
+
+/// Create every item, then copy its files.
+///
+/// A rejected item rolls the whole import back, matching `add --from`. A
+/// rejected file is reported instead, so one unreadable attachment cannot
+/// discard an otherwise correct library.
+fn run_import(backend: &mut Backend, import: RdfImport) -> Result<ImportSummary> {
+    let before = backend.before_save()?;
+    let mut added: Vec<AddedItem> = Vec::with_capacity(import.items.len());
+    let mut attachments = 0;
+    let mut skipped = import.skipped;
+
+    for source in import.items {
+        let label = source
+            .item
+            .data
+            .get("citationKey")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(&source.item.id)
+            .to_owned();
+        let mapped = match map_item(source.item).and_then(|mapped| add_item(backend, mapped.item)) {
+            Ok(mapped) => mapped,
+            Err(error) => {
+                // The library is restored, so no post-save hook is emitted.
+                for item in &added {
+                    let _ = backend.remove(&item.uuid.to_string());
+                }
+                return Err(error);
+            }
+        };
+        for attachment in source.attachments {
+            match backend.attach(
+                &mapped.uuid.to_string(),
+                &attachment.path,
+                Some(&attachment.title),
+                attachment.media_type.as_deref(),
+            ) {
+                Ok(_) => attachments += 1,
+                Err(error) => skipped.push(SkippedAttachment {
+                    item: label.clone(),
+                    title: attachment.title,
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        added.push(mapped);
+    }
+
+    backend.after_save(
+        before,
+        HookOperation::ItemImport,
+        HookItems::Uuids(added.iter().map(|item| item.uuid).collect()),
+        Vec::new(),
+    );
+    Ok(ImportSummary {
+        imported: added.len(),
+        attachments,
+        collections: import.collections,
+        items: added,
+        skipped_attachments: skipped,
+    })
+}
+
+/// Zotero citation keys are reused, but they are not authoritative here: an
+/// existing entry already owning the key, or a key Lantai rejects, falls back
+/// to the generated AuthorYearTitle form.
+fn add_item(backend: &mut Backend, item: NewItem) -> Result<AddedItem> {
+    if item.citation_key.is_none() {
+        return backend.add(item);
+    }
+    match backend.add(item.clone()) {
+        Err(Error::DuplicateCitationKey { .. } | Error::InvalidCitationKey { .. }) => {
+            backend.add(NewItem {
+                citation_key: None,
+                ..item
+            })
+        }
+        result => result,
+    }
+}
+
+fn print_import(summary: &ImportSummary, dry_run: bool) {
+    let verb = if dry_run { "Would import" } else { "Imported" };
+    println!(
+        "{verb} {} item(s) and {} file(s) from {} collection(s)",
+        summary.imported,
+        summary.attachments,
+        summary.collections.len()
+    );
+    if !summary.skipped_attachments.is_empty() {
+        println!(
+            "Skipped {} attachment(s):",
+            summary.skipped_attachments.len()
+        );
+        for skipped in &summary.skipped_attachments {
+            println!("  {}: {} ({})", skipped.item, skipped.title, skipped.reason);
+        }
+    }
 }
 
 fn read_import_source(from: &str) -> Result<String> {

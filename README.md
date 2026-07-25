@@ -12,14 +12,17 @@ Lantai 0.2.0 supports:
 - safe direct-file CLI access or daemon-backed operation;
 - an authenticated, loopback-only REST API with revision preconditions;
 - modern Zotero Connector item, PDF, snapshot, standalone-file, and tag flows;
+- bulk import of a Zotero RDF export, with its files and collections;
 - Git-style custom commands and synchronous post-save hooks.
 
 Lantai intentionally provides one library and no GUI. It does not implement
 collections, notes, a PDF/EPUB reader, word-processor integration, cloud sync,
 a plugin system, CSL-formatted bibliography or citation output, metadata
-recognition, or automatic deduplication. CSL-formatted bibliography export is
-part of the intended core scope, but is not available in Lantai 0.2.0. Lantai
-is not a Zotero profile or database replacement.
+recognition, or automatic deduplication. Importing a Zotero library flattens
+its collections into tags rather than modelling them, and drops its notes.
+CSL-formatted bibliography export is part of the intended core scope, but is
+not available in Lantai 0.2.0. Lantai is not a Zotero profile or database
+replacement.
 
 ## Install from source
 
@@ -53,6 +56,17 @@ lantai check
 `init` prints the bibliography, attachment, and configuration paths. New
 libraries use an adjacent `<bibliography-stem>.files/` directory unless
 `init --attachments PATH` is supplied.
+
+To start from an existing Zotero library, export it as **Zotero RDF** with
+**Export Files** enabled, then:
+
+```sh
+lantai import "My Library.rdf" --dry-run
+lantai import "My Library.rdf"
+```
+
+Collections become path-style tags such as `Projects/Engines`, attachment files
+are copied into managed storage, and Zotero's citation keys are reused.
 
 Run the daemon when using the REST API or browser Connector:
 

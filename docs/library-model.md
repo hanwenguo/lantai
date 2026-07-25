@@ -104,6 +104,13 @@ Tags are stored in BibLaTeX `keywords`. Lantai trims them, removes exact
 duplicates, preserves spelling/case, and sorts case-insensitively. Tag matching
 and removal are case-insensitive.
 
+Lantai has no collection model, so `lantai import` projects Zotero collection
+membership onto tags: a nested collection becomes one path-style tag per
+membership, such as `ResearchTopics/Subtyping/SemanticSubtyping`. These are
+ordinary tags with no special handling; rename or remove them with
+`lantai tag`. Because `keywords` separates tags with commas, a comma in a
+Zotero collection name becomes a space.
+
 ## Attachments
 
 A default managed attachment is stored under:
