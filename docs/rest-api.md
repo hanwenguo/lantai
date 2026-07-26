@@ -121,9 +121,9 @@ Optional query parameters:
 | --- | --- |
 | `q` | Case-insensitive substring in citation key or expanded field values |
 | `type` | Case-insensitive exact entry type |
-| `tag` | Case-insensitive exact tag |
+| `collection` | The collection and everything nested under it, case-insensitively |
 
-All supplied filters are ANDed. The response preserves bibliography order:
+Unknown parameters are ignored. Both supplied filters are ANDed. The response preserves bibliography order:
 
 ```json
 {"items": [], "revision": "..."}
@@ -134,7 +134,7 @@ curl -sS -G \
   -H "Authorization: Bearer $LANTAI_TOKEN" \
   --data-urlencode 'q=attention' \
   --data-urlencode 'type=article' \
-  --data-urlencode 'tag=reviewed' \
+  --data-urlencode 'collection=Reviewed' \
   "$LANTAI_API_URL/api/v1/items" | jq '.items'
 ```
 
@@ -171,14 +171,14 @@ Requires `If-Match`. All members are optional and are applied together:
   "set": {"title": "Revised title"},
   "set_raw": {"custom": "\"prefix \" # {Suffix}"},
   "unset": ["month"],
-  "tags": ["reviewed", "history"],
+  "collections": ["Reviewed", "History/Computing"],
   "citation_key": "newKey"
 }
 ```
 
 `set` stores literals, `set_raw` stores validated BibTeX expressions, `unset`
-removes fields, `tags` replaces the complete tag set, and `citation_key`
-renames the key. Duplicate/conflicting field actions are rejected. Returns
+removes fields, `collections` replaces the complete membership list, and
+`citation_key` renames the key. Duplicate/conflicting field actions are rejected. Returns
 `200` with the complete updated item and revision.
 
 ### `DELETE /api/v1/items/{id}`

@@ -79,7 +79,7 @@ fn list_and_show_default_to_complete_json_views() {
     let item = &listed[0];
     assert_eq!(item.uuid.unwrap().to_string(), ITEM_UUID);
     assert_eq!(item.title.as_deref(), Some("A Rich Item"));
-    assert_eq!(item.tags, ["Computing", "history"]);
+    assert_eq!(item.collections, ["Computing", "history"]);
     assert_eq!(item.attachments.len(), 1);
     assert_eq!(item.attachments[0].uuid, None);
     assert_eq!(item.attachments[0].title, None);
@@ -147,7 +147,7 @@ fn direct_post_save_hook_preserves_json_stdout_and_suppresses_nested_hooks() {
             concat!(
                 "cat > \"$1\"; ",
                 "\"$LANTAI\" --config \"$LANTAI_CONFIG\" ",
-                "tag add rich nested --json; ",
+                "collection add rich nested --json; ",
                 "printf x >> \"$2\""
             )
             .to_owned(),
@@ -188,5 +188,5 @@ fn direct_post_save_hook_preserves_json_stdout_and_suppresses_nested_hooks() {
         .output()
         .unwrap();
     let shown: ItemView = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(shown.tags, ["nested"]);
+    assert_eq!(shown.collections, ["nested"]);
 }

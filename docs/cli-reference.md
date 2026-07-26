@@ -59,21 +59,24 @@ Runs the native REST and Zotero Connector listeners until interrupted. Both
 listeners must bind successfully. See [REST API](rest-api.md) and [Connector
 setup](zotero-connector.md).
 
-## Read and search
+## Search
 
 ### `list`
 
 ```text
-lantai list [QUERY] [--type TYPE] [--tag TAG] [--format json|human]
+lantai list [QUERY] [--type TYPE] [--collection COLLECTION] [--format json|human]
 ```
 
 Returns a JSON array in bibliography source order, or tab-separated
 key/type/title rows in human mode. `QUERY` is a case-insensitive substring over
-citation keys and expanded field values. Type and tag are case-insensitive
-exact filters; all supplied filters are ANDed. An empty result is `[]`.
+citation keys and expanded field values. `--type` is a case-insensitive exact
+filter; `--collection` matches the named collection and everything nested under
+it, case-insensitively, so `--collection Projects` also finds items in
+`Projects/IfT`. All supplied filters are ANDed. An empty result is `[]`.
 
 ```sh
-lantai list attention --type article --tag reviewed
+lantai list attention --type article --collection Reviewed
+lantai list --collection Projects
 lantai list --format human
 ```
 
@@ -89,7 +92,30 @@ lantai show ID [--format json|human]
 Returns one complete item object. Human mode prints the entry type/key, UUID,
 and expanded fields.
 
-## Create, import, and edit
+### `collection list`
+
+```text
+lantai collection list [--json]
+```
+
+Lists every collection in the library. Human output nests on `/` and shows leaf
+names; `--json` is a flat array of complete names in the same order, which is
+what `--collection` expects back.
+
+```console
+$ lantai collection list
+Inbox
+Projects
+  IfT
+```
+
+A collection exists only through the items in it, so an empty library lists
+nothing. Ancestors are shown even when no item belongs to them directly: a
+library holding only `Projects/IfT` still lists `Projects`. Every listed name
+works as a `--collection` filter, including such an ancestor, because the
+filter matches nested collections too.
+
+## Edit
 
 ### `add`
 
@@ -123,13 +149,14 @@ with **Export Files** enabled. Zotero RDF is the only built-in Zotero format
 that carries collections, attachment files, and citation keys together.
 
 Each Zotero item becomes one entry, using the same item-type and field mapping
-as the Connector. Collection membership becomes path-style tags such as
-`Projects/Engines`, since Lantai has no collection model; a comma in a
-collection name becomes a space. `<z:citationKey>` values are reused, falling
-back to a generated `AuthorYearTitle` key when the key is already taken or
-Lantai rejects it. Zotero's own tags and its notes are not imported. Zotero
-writes `dc:date` in its application locale, so dates are converted to ISO 8601,
-narrowing to the year alone when the month cannot be recognized.
+as the Connector. A nested Zotero collection becomes one `/`-joined name such as
+`Projects/Engines`; a comma in a collection name becomes a space, because
+`keywords` separates values with commas. `<z:citationKey>` values are reused,
+falling back to a generated `AuthorYearTitle` key when the key is already taken
+or Lantai rejects it. **Zotero's own tags are not imported**, and neither are
+its notes. Zotero writes `dc:date` in its application locale, so dates are
+converted to ISO 8601, narrowing to the year alone when the month cannot be
+recognized.
 
 Attachment files are copied into managed storage, so the export directory can
 be deleted afterwards. `--attachment-base PATH` resolves linked files that
@@ -183,17 +210,24 @@ lantai unset ID FIELD ... [--json]
 Removes fields case-insensitively. Managed identity fields cannot be changed
 through ordinary field operations.
 
-### `tag add` and `tag remove`
+### `collection add` and `collection remove`
 
 ```text
-lantai tag add ID TAG ... [--json]
-lantai tag remove ID TAG ... [--json]
+lantai collection add ID COLLECTION ... [--json]
+lantai collection remove ID COLLECTION ... [--json]
 ```
 
-Adds unique normalized tags or removes matching tags case-insensitively.
+Adds the item to collections, ignoring ones it already belongs to, or removes
+it from matching collections case-insensitively. Adding to `Projects/IfT`
+creates that collection if no other item was in it.
 
-The JSON output for `set`, `set-raw`, `unset`, and tag mutations contains the
-item `uuid` and resulting `citation_key`.
+Both are exact-name operations, unlike the `--collection` filter: removing
+`Projects` leaves an item in `Projects/IfT` alone. Adding a name the item
+already carries in another case or with different spacing changes nothing and
+keeps the existing spelling.
+
+The JSON output for `set`, `set-raw`, `unset`, and collection mutations
+contains the item `uuid` and resulting `citation_key`.
 
 ### `remove`
 
@@ -204,7 +238,7 @@ lantai remove ID [--json]
 Removes the bibliography entry and moves its managed attachments to trash.
 External files are untouched. JSON contains the optional UUID and citation key.
 
-## Attachment and trash commands
+## Attachments
 
 ### `attach`
 
@@ -244,7 +278,7 @@ lantai trash purge [--json]
 Permanently deletes all managed trash. JSON is `{"purged": NUMBER}`. This
 operation is irreversible.
 
-## Export, formatting, and diagnostics
+## Output
 
 ### `export`
 
@@ -255,15 +289,6 @@ lantai export [ID ...] [-o|--output PATH]
 Writes canonical BibLaTeX for the complete library or selected records. Output
 defaults to stdout; `--output -` also means stdout. Selection retains required
 support blocks such as strings and preambles.
-
-### `format`
-
-```text
-lantai format [--json]
-```
-
-Canonicalizes the library and assigns missing UUIDs. JSON contains `changed`
-and `assigned_ids`. Review or back up hand-formatted source first.
 
 ### `check`
 
@@ -276,13 +301,22 @@ temporary data without changing the library. JSON contains `status`, counts,
 and an `issues` array; each issue has severity, code, message, optional citation
 key, and optional line/column. Errors produce a nonzero exit status.
 
+### `format`
+
+```text
+lantai format [--json]
+```
+
+Canonicalizes the library and assigns missing UUIDs. JSON contains `changed`
+and `assigned_ids`. Review or back up hand-formatted source first.
+
 ## Custom commands
 
 An unknown built-in name is dispatched Git-style: `lantai NAME ARGS...` runs
 `lantai-NAME` from `PATH`. Built-ins win, paths in names are rejected, and the
 child inherits standard streams and exit status. See the [extension guide](../extension/README.md)
 for the environment contract and the six shipped commands: `table`, `query`,
-`pick`, `open`, `batch-tag`, and `api-list`.
+`pick`, `open`, `batch-collection`, and `api-list`.
 
 Use `lantai COMMAND --help` as the executable source of truth for command-line
 spelling.

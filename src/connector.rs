@@ -65,7 +65,7 @@ struct SaveSession {
     created: Instant,
     action: SaveAction,
     items: HashMap<String, Uuid>,
-    current_user_tags: Vec<String>,
+    current_user_collections: Vec<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -221,16 +221,15 @@ impl ConnectorState {
         LibraryStore::new(self.inner.layout.clone())
     }
 
-    /// Every tag in the library, deduped and ordered.
-    async fn library_tags(&self) -> ConnectorResult<BTreeSet<String>> {
+    /// Every collection in the library, deduped and ordered.
+    async fn library_collections(&self) -> ConnectorResult<BTreeSet<String>> {
         let layout = self.inner.layout.clone();
         run_blocking(move || {
             let source = layout.read_utf8()?;
             let catalog = Catalog::parse(&layout.bibliography, &source)?;
-            Ok(catalog
-                .items()
-                .flat_map(|item| item.tags)
-                .collect::<BTreeSet<_>>())
+            Ok(collections::of_items(
+                catalog.items().map(|item| item.collections),
+            ))
         })
         .await
         .map_err(|_| ConnectorError::internal("LIBRARY_READ_FAILED"))
@@ -259,7 +258,7 @@ impl ConnectorState {
                 created: Instant::now(),
                 action,
                 items: HashMap::new(),
-                current_user_tags: Vec::new(),
+                current_user_collections: Vec::new(),
             },
         );
         Ok(())
@@ -267,18 +266,13 @@ impl ConnectorState {
 
     /// Record the items a save produced.
     ///
-    /// `applied_tags` are the tags the save already wrote, so a later
-    /// `updateSession` rebases them away instead of leaving a stale target tag
-    /// behind when the user picks a different collection.
-    async fn finish_session(
-        &self,
-        id: &str,
-        items: HashMap<String, Uuid>,
-        applied_tags: Vec<String>,
-    ) {
+    /// `applied` are the collections the save already wrote, so a later
+    /// `updateSession` rebases them away instead of leaving a stale collection
+    /// behind when the user picks a different one.
+    async fn finish_session(&self, id: &str, items: HashMap<String, Uuid>, applied: Vec<String>) {
         if let Some(session) = self.inner.sessions.lock().await.get_mut(id) {
             session.items = items;
-            session.current_user_tags = applied_tags;
+            session.current_user_collections = applied;
         }
     }
 
@@ -415,9 +409,9 @@ async fn save_items(
         .items
         .into_iter()
         .map(|mut item| {
-            if let Some(collection) = &collection {
-                item.tags.push(JsonValue::String(collection.clone()));
-            }
+            // Out of band from the item's own `tags`, which are the
+            // translator's scraped keywords and are ignored.
+            item.collections = collection.clone().into_iter().collect();
             map_item(item)
         })
         .collect::<LantaiResult<Vec<_>>>()
@@ -763,21 +757,21 @@ async fn save_single_file(
 async fn get_selected_collection(
     State(state): State<ConnectorState>,
 ) -> ConnectorResult<Json<JsonValue>> {
-    let tags = state.library_tags().await?;
+    let library = state.library_collections().await?;
     let selected = state.selected_target().await;
-    let collections = collections::tree(tags.iter().cloned());
+    let tree = collections::tree(library.iter().cloned());
 
     // The popup preselects this row and offers recent targets first.
     let current = selected
         .as_deref()
-        .and_then(|path| collections.iter().find(|target| target.path == path));
+        .and_then(|path| tree.iter().find(|target| target.path == path));
     let mut targets = vec![json!({
         "id": collections::LIBRARY_TARGET,
         "name": LIBRARY_NAME,
         "filesEditable": true,
         "level": 0,
     })];
-    targets.extend(collections.iter().map(|target| {
+    targets.extend(tree.iter().map(|target| {
         let mut row = json!({
             "id": target.id,
             "name": target.name,
@@ -790,9 +784,11 @@ async fn get_selected_collection(
         row
     }));
 
-    let tags = tags
+    // `tag` and `tags` are Zotero's names on this wire, not Lantai's: the popup
+    // autocompletes a flat name list, which for Lantai is the collection set.
+    let tags = library
         .into_iter()
-        .map(|tag| json!({ "tag": tag, "type": 0 }))
+        .map(|collection| json!({ "tag": collection, "type": 0 }))
         .collect::<Vec<_>>();
     Ok(Json(json!({
         "libraryID": 1,
@@ -804,7 +800,7 @@ async fn get_selected_collection(
         "name": current.map_or(LIBRARY_NAME, |target| target.name.as_str()),
         "targets": targets,
         // Keyed by library: the popup resolves a collection to its root target
-        // before looking up the tag list for autocomplete.
+        // before looking up the name list for autocomplete.
         "tags": {collections::LIBRARY_TARGET: tags}
     })))
 }
@@ -818,13 +814,13 @@ async fn update_session(
         return Err(ConnectorError::bad_request("NOTES_NOT_SUPPORTED"));
     }
     // The library root files an item under no collection at all; any other
-    // target names a tag, which the popup's own tags then join.
+    // target names a collection, which the popup's own entries then join.
     let collection = if request.target == collections::LIBRARY_TARGET {
         None
     } else {
-        let tags = state.library_tags().await?;
+        let library = state.library_collections().await?;
         Some(
-            collections::resolve(tags, &request.target)
+            collections::resolve(library, &request.target)
                 .ok_or_else(|| ConnectorError::bad_request("TARGET_NOT_FOUND"))?,
         )
     };
@@ -832,12 +828,12 @@ async fn update_session(
     if let Some(collection) = &collection
         && !replacement
             .iter()
-            .any(|tag| tag.eq_ignore_ascii_case(collection))
+            .any(|candidate| candidate.eq_ignore_ascii_case(collection))
     {
         replacement.push(collection.clone());
     }
     let session = state.session(&request.session_id).await?;
-    let previous = session.current_user_tags;
+    let previous = session.current_user_collections;
     let item_ids = session.items.values().copied().collect::<BTreeSet<_>>();
     let affected = item_ids.iter().copied().collect::<Vec<_>>();
     let store = state.store();
@@ -846,7 +842,7 @@ async fn update_session(
     let before = before_hook(&state);
     run_blocking(move || {
         for item_id in item_ids {
-            store.rebase_tags(&item_id.to_string(), &previous, &replacement_for_write)?;
+            store.rebase_collections(&item_id.to_string(), &previous, &replacement_for_write)?;
         }
         Ok(())
     })
@@ -859,7 +855,7 @@ async fn update_session(
         .await
         .get_mut(&request.session_id)
     {
-        session.current_user_tags = replacement;
+        session.current_user_collections = replacement;
     }
     state.set_selected_target(collection).await;
     let prepared = state.inner.hook.prepare(
@@ -1456,7 +1452,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn translated_item_attachment_snapshot_and_tags_follow_one_session() {
+    async fn translated_item_attachment_snapshot_and_collections_follow_one_session() {
         let (_directory, state) = test_state();
         let app = connector_router(state.clone());
         let save = json!({
@@ -1552,7 +1548,9 @@ mod tests {
         let source = state.inner.layout.read_utf8().unwrap();
         let catalog = Catalog::parse(&state.inner.layout.bibliography, &source).unwrap();
         let item = catalog.find("lovelace1843sketch").unwrap();
-        assert_eq!(item.tags, vec!["automatic", "manual"]);
+        // The translator's automatic keyword is dropped; only what the user
+        // typed in the popup becomes a collection.
+        assert_eq!(item.collections, vec!["manual"]);
         assert_eq!(item.attachments.len(), 2);
         assert_eq!(item.attachments[0].title, "Mémoire");
         assert_eq!(
@@ -1584,7 +1582,7 @@ mod tests {
     }
 
     /// A library whose tags form a nested collection tree.
-    fn tagged_state() -> (tempfile::TempDir, ConnectorState) {
+    fn filed_state() -> (tempfile::TempDir, ConnectorState) {
         let (directory, state) = test_state();
         std::fs::write(
             &state.inner.layout.bibliography,
@@ -1653,19 +1651,19 @@ mod tests {
             .status()
     }
 
-    fn tags_of(state: &ConnectorState, title: &str) -> Vec<String> {
+    fn collections_of(state: &ConnectorState, title: &str) -> Vec<String> {
         let source = state.inner.layout.read_utf8().unwrap();
         let catalog = Catalog::parse(&state.inner.layout.bibliography, &source).unwrap();
         catalog
             .views()
             .find(|item| item.title.as_deref() == Some(title))
             .unwrap_or_else(|| panic!("no item titled {title}"))
-            .tags
+            .collections
     }
 
     #[tokio::test]
-    async fn tags_are_offered_as_a_nested_collection_tree() {
-        let (_directory, state) = tagged_state();
+    async fn collections_are_offered_as_a_nested_tree() {
+        let (_directory, state) = filed_state();
         let app = connector_router(state);
 
         let body = selected_collection(&app).await;
@@ -1685,8 +1683,9 @@ mod tests {
             [
                 ("Lantai", 0),
                 ("Inbox", 1),
-                // Neither parent is a tag; both are synthesized so the popup can
-                // find each row's parent by scanning back one level.
+                // No item belongs to either parent directly; both are
+                // synthesized so the popup can find each row's parent by
+                // scanning back one level.
                 ("Projects", 1),
                 ("IfT", 2),
                 ("ResearchTopics", 1),
@@ -1704,12 +1703,14 @@ mod tests {
         );
         assert_eq!(body["id"], JsonValue::Null);
         assert_eq!(body["name"], "Lantai");
+        // `tags`/`tag` are Zotero's protocol names for the flat autocomplete
+        // list, which for Lantai is the collection set.
         assert_eq!(body["tags"]["L1"][0]["tag"], "Inbox");
     }
 
     #[tokio::test]
-    async fn choosing_a_collection_tags_the_session_and_retargeting_moves_it() {
-        let (_directory, state) = tagged_state();
+    async fn choosing_a_collection_files_the_session_and_retargeting_moves_it() {
+        let (_directory, state) = filed_state();
         let app = connector_router(state.clone());
         let targets = selected_collection(&app).await;
         let id = |name: &str| {
@@ -1729,7 +1730,7 @@ mod tests {
             retarget(&app, "s1", &id("IfT"), json!(["manual"])).await,
             StatusCode::OK
         );
-        assert_eq!(tags_of(&state, "Filed"), ["manual", "Projects/IfT"]);
+        assert_eq!(collections_of(&state, "Filed"), ["manual", "Projects/IfT"]);
 
         // Switching targets moves the item rather than accumulating memberships.
         assert_eq!(
@@ -1737,7 +1738,7 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(
-            tags_of(&state, "Filed"),
+            collections_of(&state, "Filed"),
             ["manual", "ResearchTopics/Subtyping/Semantic"]
         );
 
@@ -1746,12 +1747,12 @@ mod tests {
             retarget(&app, "s1", "L1", json!(["manual"])).await,
             StatusCode::OK
         );
-        assert_eq!(tags_of(&state, "Filed"), ["manual"]);
+        assert_eq!(collections_of(&state, "Filed"), ["manual"]);
     }
 
     #[tokio::test]
     async fn the_chosen_collection_is_remembered_for_the_next_capture() {
-        let (_directory, state) = tagged_state();
+        let (_directory, state) = filed_state();
         let app = connector_router(state.clone());
         let targets = selected_collection(&app).await;
         let inbox = targets["targets"]
@@ -1786,7 +1787,7 @@ mod tests {
         // A later capture lands there without any popup interaction, which is
         // the only chance to apply it: updateSession fires only on user edits.
         assert_eq!(save_one(&app, "s2", "Second").await, StatusCode::CREATED);
-        assert_eq!(tags_of(&state, "Second"), ["Inbox"]);
+        assert_eq!(collections_of(&state, "Second"), ["Inbox"]);
 
         // A snapshot save takes the remembered target too.
         let page = json!({
@@ -1806,12 +1807,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(saved.status(), StatusCode::CREATED);
-        assert_eq!(tags_of(&state, "Page"), ["Inbox"]);
+        assert_eq!(collections_of(&state, "Page"), ["Inbox"]);
     }
 
     #[tokio::test]
     async fn an_unknown_target_is_rejected() {
-        let (_directory, state) = tagged_state();
+        let (_directory, state) = filed_state();
         let app = connector_router(state.clone());
         assert_eq!(save_one(&app, "s1", "Filed").await, StatusCode::CREATED);
 
@@ -1823,7 +1824,7 @@ mod tests {
             retarget(&app, "s1", "not-a-target", json!([])).await,
             StatusCode::BAD_REQUEST
         );
-        assert!(tags_of(&state, "Filed").is_empty());
+        assert!(collections_of(&state, "Filed").is_empty());
     }
 
     #[tokio::test]

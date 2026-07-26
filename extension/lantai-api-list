@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: lantai api-list [QUERY] [--type TYPE] [--tag TAG]
+Usage: lantai api-list [QUERY] [--type TYPE] [--collection COLLECTION]
 
 Query the native REST API and emit its complete {"items": [...], "revision":
 "..."} envelope. LANTAI_TOKEN is required; LANTAI_API_URL defaults to
@@ -13,7 +13,7 @@ EOF
 
 query=
 entry_type=
-tag=
+collection=
 while (($# > 0)); do
   case $1 in
     --type)
@@ -21,9 +21,9 @@ while (($# > 0)); do
       entry_type=$2
       shift 2
       ;;
-    --tag)
-      (($# >= 2)) || { echo "lantai api-list: --tag requires a value" >&2; exit 2; }
-      tag=$2
+    --collection)
+      (($# >= 2)) || { echo "lantai api-list: --collection requires a value" >&2; exit 2; }
+      collection=$2
       shift 2
       ;;
     --help|-h)
@@ -67,6 +67,6 @@ curl_args=(
 )
 [[ -z $query ]] || curl_args+=(--data-urlencode "q=$query")
 [[ -z $entry_type ]] || curl_args+=(--data-urlencode "type=$entry_type")
-[[ -z $tag ]] || curl_args+=(--data-urlencode "tag=$tag")
+[[ -z $collection ]] || curl_args+=(--data-urlencode "collection=$collection")
 
 curl "${curl_args[@]}" "${api_url%/}/api/v1/items" | jq .

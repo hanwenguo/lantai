@@ -137,7 +137,7 @@ impl ApiClient {
         &mut self,
         query: Option<&str>,
         entry_type: Option<&str>,
-        tag: Option<&str>,
+        collection: Option<&str>,
     ) -> Result<Vec<ItemView>> {
         let mut request = self
             .agent
@@ -149,8 +149,8 @@ impl ApiClient {
         if let Some(entry_type) = entry_type {
             request = request.query("type", entry_type);
         }
-        if let Some(tag) = tag {
-            request = request.query("tag", tag);
+        if let Some(collection) = collection {
+            request = request.query("collection", collection);
         }
         let response = self.call(request.call())?;
         let listed: ListResponse = self.decode(response)?;

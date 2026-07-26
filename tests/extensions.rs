@@ -19,7 +19,7 @@ const EXTENSIONS: &[&str] = &[
     "lantai-query",
     "lantai-pick",
     "lantai-open",
-    "lantai-batch-tag",
+    "lantai-batch-collection",
     "lantai-api-list",
 ];
 
@@ -228,6 +228,7 @@ impl WorkflowFixture {
                     "}}\n",
                     "@article{{missing,\n",
                     "  title = {{Missing Identity}},\n",
+                    "  keywords = {{needs-review}},\n",
                     "  author = {{Ada Lovelace}}\n",
                     "}}\n",
                     "@book{{other,\n",
@@ -381,24 +382,34 @@ fn official_extensions_execute_the_documented_workflows() {
     }
 
     let refused = fixture.run(&[
-        "batch-tag",
+        "batch-collection",
         "--apply",
         "blocked",
         ".entry_type == \"article\"",
     ]);
     assert_eq!(refused.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&refused.stderr).contains("selected item has no UUID"));
-    assert!(!fixture.show("rich").tags.contains(&"blocked".to_owned()));
+    assert!(
+        !fixture
+            .show("rich")
+            .collections
+            .contains(&"blocked".to_owned())
+    );
 
-    let preview = fixture.run(&["batch-tag", "reviewed", ".citation_key == \"rich\""]);
+    let preview = fixture.run(&["batch-collection", "Reviewed", ".citation_key == \"rich\""]);
     assert!(preview.status.success());
     assert!(String::from_utf8_lossy(&preview.stderr).contains("Preview only"));
-    assert!(!fixture.show("rich").tags.contains(&"reviewed".to_owned()));
+    assert!(
+        !fixture
+            .show("rich")
+            .collections
+            .contains(&"Reviewed".to_owned())
+    );
 
     let applied = fixture.run(&[
-        "batch-tag",
+        "batch-collection",
         "--apply",
-        "reviewed",
+        "Reviewed",
         ".citation_key == \"rich\"",
     ]);
     assert!(
@@ -406,10 +417,22 @@ fn official_extensions_execute_the_documented_workflows() {
         "{}",
         String::from_utf8_lossy(&applied.stderr)
     );
-    assert!(fixture.show("rich").tags.contains(&"reviewed".to_owned()));
+    assert!(
+        fixture
+            .show("rich")
+            .collections
+            .contains(&"Reviewed".to_owned())
+    );
 
     let api = Command::new(env!("CARGO_BIN_EXE_lantai"))
-        .args(["api-list", "attention", "--type", "ONLINE", "--tag", "Keep"])
+        .args([
+            "api-list",
+            "attention",
+            "--type",
+            "ONLINE",
+            "--collection",
+            "Keep",
+        ])
         .env("PATH", &fixture.path)
         .env("CURL_LOG", &fixture.curl_log)
         .env("LANTAI_TOKEN", "test-token")
@@ -427,7 +450,7 @@ fn official_extensions_execute_the_documented_workflows() {
     assert!(curl_arguments.contains("Authorization: Bearer test-token"));
     assert!(curl_arguments.contains("q=attention"));
     assert!(curl_arguments.contains("type=ONLINE"));
-    assert!(curl_arguments.contains("tag=Keep"));
+    assert!(curl_arguments.contains("collection=Keep"));
     assert!(curl_arguments.contains("http://127.0.0.1:9999/api/v1/items"));
 
     let missing_token = Command::new(env!("CARGO_BIN_EXE_lantai"))

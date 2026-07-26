@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use bibtex_parser::{DiagnosticSeverity, ParseStatus, ParsedEntry, Parser};
@@ -21,7 +21,7 @@ pub struct CatalogItem {
     pub citation_key: String,
     pub entry_type: String,
     pub fields: Vec<CatalogField>,
-    pub tags: Vec<String>,
+    pub collections: Vec<String>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -40,7 +40,7 @@ pub struct ItemView {
     pub entry_type: String,
     pub title: Option<String>,
     pub fields: Vec<CatalogField>,
-    pub tags: Vec<String>,
+    pub collections: Vec<String>,
     pub attachments: Vec<AttachmentView>,
 }
 
@@ -254,9 +254,11 @@ impl From<&ParsedEntry<'_>> for CatalogItem {
             citation_key: entry.key().to_owned(),
             entry_type: entry.ty.to_string(),
             fields,
-            tags: entry
+            collections: entry
                 .get_as_string_ignore_case("keywords")
-                .map_or_else(Vec::new, |keywords| normalize_tags(&keywords)),
+                .map_or_else(Vec::new, |keywords| {
+                    crate::collections::normalize(keywords.split(','))
+                }),
             attachments: entry
                 .get_as_string_ignore_case("file")
                 .and_then(|value| parse_file_field(&value).ok())
@@ -278,7 +280,7 @@ impl From<CatalogItem> for ItemView {
             entry_type: item.entry_type,
             title,
             fields: item.fields,
-            tags: item.tags,
+            collections: item.collections,
             attachments: item
                 .attachments
                 .into_iter()
@@ -295,7 +297,7 @@ impl From<ItemView> for CatalogItem {
             citation_key: view.citation_key,
             entry_type: view.entry_type,
             fields: view.fields,
-            tags: view.tags,
+            collections: view.collections,
             attachments: view.attachments.into_iter().map(Attachment::from).collect(),
         }
     }
@@ -329,19 +331,6 @@ fn entry_uuid(entry: &ParsedEntry<'_>) -> Option<Uuid> {
         .and_then(|value| Uuid::parse_str(value.trim()).ok())
 }
 
-fn normalize_tags(keywords: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut tags = keywords
-        .split(',')
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .filter(|tag| seen.insert((*tag).to_owned()))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    tags.sort_by_key(|tag| tag.to_lowercase());
-    tags
-}
-
 fn entry_issue(
     severity: IssueSeverity,
     code: &str,
@@ -360,12 +349,14 @@ fn entry_issue(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     const UUID: &str = "cc9e50c4-55ee-4471-b17c-c41684f64bf9";
 
     #[test]
-    fn catalog_projects_fields_raw_values_and_tags() {
+    fn catalog_projects_fields_raw_values_and_collections() {
         let source = format!(
             r#"@article{{lovelace1843sketch,
   title = {{A Sketch of the Analytical Engine}},
@@ -378,7 +369,7 @@ mod tests {
         let item = catalog.find(UUID).unwrap();
 
         assert_eq!(item.citation_key, "lovelace1843sketch");
-        assert_eq!(item.tags, ["Computing", "history"]);
+        assert_eq!(item.collections, ["Computing", "history"]);
         assert_eq!(
             ItemView::from(item.clone()).title.as_deref(),
             Some("A Sketch of the Analytical Engine")
@@ -415,7 +406,7 @@ mod tests {
             ["note", "keywords", "file"]
         );
         assert_eq!(view.fields[0].raw.as_deref(), Some("\"raw \" # {value}"));
-        assert_eq!(view.tags, ["alpha", "Zeta"]);
+        assert_eq!(view.collections, ["alpha", "Zeta"]);
         assert_eq!(view.attachments.len(), 2);
         assert_eq!(
             view.attachments[0].uuid,

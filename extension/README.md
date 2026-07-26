@@ -29,7 +29,7 @@ install -m 755 extension/lantai-* "$HOME/.local/bin/"
 ```
 
 The scripts can also be called directly, such as
-`extension/lantai-table --tag reviewed`.
+`extension/lantai-table --collection Reviewed`.
 
 ## Official commands
 
@@ -39,11 +39,11 @@ The scripts can also be called directly, such as
 | `lantai query FILTER [-- LIST_ARGS...]` | Select items with a jq predicate | `jq` |
 | `lantai pick [--id-only] [-- LIST_ARGS...]` | Fuzzy-select an item | `jq`, `fzf` |
 | `lantai open [--print] [-- LIST_ARGS...]` | Fuzzy-select and open an attachment | `jq`, `fzf`, `open` or `xdg-open` |
-| `lantai batch-tag [--apply] TAG FILTER [-- LIST_ARGS...]` | Preview or apply a tag batch | `jq`; optional `column` |
-| `lantai api-list [QUERY] [--type TYPE] [--tag TAG]` | Query the native REST API | `curl`, `jq` |
+| `lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]` | Preview or apply a batch membership change | `jq`; optional `column` |
+| `lantai api-list [QUERY] [--type TYPE] [--collection COLLECTION]` | Query the native REST API | `curl`, `jq` |
 
 Run any command with `--help` for its complete interface. Arguments after
-`--` in `query`, `pick`, `open`, and `batch-tag` are passed to
+`--` in `query`, `pick`, `open`, and `batch-collection` are passed to
 the built-in `list` command.
 
 ## Extension process contract

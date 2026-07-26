@@ -3,11 +3,11 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: lantai batch-tag [--apply] TAG FILTER [-- LIST_ARGS...]
+Usage: lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]
 
-Preview items selected by a jq predicate and add TAG to them. FILTER runs with
-each item as `.` and a lowercase `$fields` object. No changes occur unless
---apply is present. Arguments after `--` are forwarded to `lantai list`.
+Preview items selected by a jq predicate and add them to COLLECTION. FILTER
+runs with each item as `.` and a lowercase `$fields` object. No changes occur
+unless --apply is present. Arguments after `--` are forwarded to `lantai list`.
 EOF
 }
 
@@ -25,19 +25,19 @@ if (($# < 2)); then
   exit 2
 fi
 
-tag=$1
+collection=$1
 filter=$2
 shift 2
 if (($# > 0)); then
   if [[ $1 != "--" ]]; then
-    echo "lantai batch-tag: list arguments must follow --" >&2
+    echo "lantai batch-collection: list arguments must follow --" >&2
     exit 2
   fi
   shift
 fi
 
 command -v jq >/dev/null 2>&1 || {
-  echo "lantai batch-tag: jq is required" >&2
+  echo "lantai batch-collection: jq is required" >&2
   exit 127
 }
 
@@ -47,7 +47,7 @@ if [[ -n ${LANTAI_CONFIG:-} ]]; then
   lantai_args+=(--config "$LANTAI_CONFIG")
 fi
 
-selection_file=$(mktemp "${TMPDIR:-/tmp}/lantai-batch-tag.XXXXXX")
+selection_file=$(mktemp "${TMPDIR:-/tmp}/lantai-batch-collection.XXXXXX")
 trap 'rm -f "$selection_file"' EXIT
 
 jq_program='map(
@@ -73,12 +73,12 @@ else
 fi
 
 if ! $apply; then
-  echo "Preview only; rerun with --apply to add tag '$tag'." >&2
+  echo "Preview only; rerun with --apply to add them to '$collection'." >&2
   exit 0
 fi
 
 if jq -e 'any(.[]; .uuid == null)' "$selection_file" >/dev/null; then
-  echo "lantai batch-tag: refusing to apply because a selected item has no UUID; run lantai format first" >&2
+  echo "lantai batch-collection: refusing to apply because a selected item has no UUID; run lantai format first" >&2
   exit 2
 fi
 
@@ -89,7 +89,7 @@ if ((count == 0)); then
 fi
 
 while IFS= read -r -d '' uuid; do
-  "$LANTAI" "${lantai_args[@]}" tag add "$uuid" "$tag" --json >/dev/null
+  "$LANTAI" "${lantai_args[@]}" collection add "$uuid" "$collection" --json >/dev/null
 done < <(jq -j '.[] | .uuid, "\u0000"' "$selection_file")
 
-printf "Tagged %d item(s) with '%s'.\n" "$count" "$tag"
+printf "Added %d item(s) to '%s'.\n" "$count" "$collection"

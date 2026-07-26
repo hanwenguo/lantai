@@ -84,8 +84,7 @@ including a new API token, and never truncates the bibliography.
 Verify a change with:
 
 ```sh
-lantai health
+lantai check
 ```
 
-which reports the paths actually in use.
-
+which reports the paths actually in use along with the library's integrity.

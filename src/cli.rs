@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
 use crate::client::{ApiClient, ApiHealth};
+use crate::collections;
 use crate::config::{
     Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, LIBRARY_ENV, absolutize, default_config_path,
     resolve_library,
@@ -76,9 +77,9 @@ enum Command {
         #[arg(long = "type")]
         entry_type: Option<String>,
 
-        /// Include only entries with this tag.
+        /// Include only entries in this collection.
         #[arg(long)]
-        tag: Option<String>,
+        collection: Option<String>,
 
         /// Select JSON or the legacy tab-separated display (defaults to JSON).
         #[arg(long, value_enum)]
@@ -176,10 +177,10 @@ enum Command {
         output: JsonOutput,
     },
 
-    /// Add or remove item tags.
-    Tag {
+    /// List the library's collections, or change an item's membership.
+    Collection {
         #[command(subcommand)]
-        action: TagAction,
+        action: CollectionAction,
 
         #[command(flatten)]
         output: JsonOutput,
@@ -255,19 +256,22 @@ enum Command {
 }
 
 #[derive(Debug, Subcommand)]
-enum TagAction {
-    /// Add one or more tags.
+enum CollectionAction {
+    /// List every collection in the library.
+    List,
+
+    /// Add the item to one or more collections.
     Add {
         id: String,
-        #[arg(required = true)]
-        tags: Vec<String>,
+        #[arg(required = true, value_name = "COLLECTION")]
+        collections: Vec<String>,
     },
 
-    /// Remove one or more tags, matching case-insensitively.
+    /// Remove the item from one or more collections, matching case-insensitively.
     Remove {
         id: String,
-        #[arg(required = true)]
-        tags: Vec<String>,
+        #[arg(required = true, value_name = "COLLECTION")]
+        collections: Vec<String>,
     },
 }
 
@@ -405,20 +409,29 @@ impl Backend {
         &mut self,
         query: Option<&str>,
         entry_type: Option<&str>,
-        tag: Option<&str>,
+        collection: Option<&str>,
     ) -> Result<Vec<ItemView>> {
         match &mut self.mode {
-            BackendMode::Daemon(client) => client.list(query, entry_type, tag),
+            BackendMode::Daemon(client) => client.list(query, entry_type, collection),
             BackendMode::Direct(_) => {
                 let contents = self.layout.read_utf8()?;
                 let catalog = Catalog::parse(&self.layout.bibliography, &contents)?;
                 Ok(catalog
                     .items()
-                    .filter(|item| matches_item(item, query, entry_type, tag))
+                    .filter(|item| matches_item(item, query, entry_type, collection))
                     .map(ItemView::from)
                     .collect())
             }
         }
+    }
+
+    /// Every collection in the library, deduped and ordered.
+    fn collections(&mut self) -> Result<BTreeSet<String>> {
+        Ok(collections::of_items(
+            self.list(None, None, None)?
+                .into_iter()
+                .map(|item| item.collections),
+        ))
     }
 
     fn add(&mut self, item: NewItem) -> Result<AddedItem> {
@@ -456,35 +469,39 @@ impl Backend {
         }
     }
 
-    fn change_tags(&mut self, id: &str, tags: &[String], add: bool) -> Result<MutationResult> {
+    fn change_collections(
+        &mut self,
+        id: &str,
+        changed: &[String],
+        add: bool,
+    ) -> Result<MutationResult> {
+        // Normalizing first is what keeps this arm's result identical to the
+        // direct arm, which normalizes inside the store.
+        let changed = collections::normalize(changed.iter().map(String::as_str));
         match &mut self.mode {
             BackendMode::Daemon(client) => {
                 let item = client.get_item(id)?;
-                let mut updated = item.tags;
+                let mut updated = item.collections;
                 if add {
-                    for tag in tags {
-                        if !updated
-                            .iter()
-                            .any(|candidate| candidate.eq_ignore_ascii_case(tag))
-                        {
-                            updated.push(tag.clone());
-                        }
-                    }
+                    updated.extend(changed.iter().cloned());
+                    updated = collections::normalize(updated.iter().map(String::as_str));
                 } else {
                     updated.retain(|candidate| {
-                        !tags.iter().any(|tag| candidate.eq_ignore_ascii_case(tag))
+                        !changed
+                            .iter()
+                            .any(|collection| candidate.eq_ignore_ascii_case(collection))
                     });
                 }
                 client.patch_item(
                     id,
                     &ItemPatch {
-                        tags: Some(updated),
+                        collections: Some(updated),
                         ..ItemPatch::default()
                     },
                 )
             }
-            BackendMode::Direct(store) if add => store.add_tags(id, tags),
-            BackendMode::Direct(store) => store.remove_tags(id, tags),
+            BackendMode::Direct(store) if add => store.add_collections(id, &changed),
+            BackendMode::Direct(store) => store.remove_collections(id, &changed),
         }
     }
 
@@ -634,12 +651,15 @@ fn run_cli(cli: Cli) -> Result<()> {
         Command::List {
             query,
             entry_type,
-            tag,
+            collection,
             format,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            let summaries =
-                backend.list(query.as_deref(), entry_type.as_deref(), tag.as_deref())?;
+            let summaries = backend.list(
+                query.as_deref(),
+                entry_type.as_deref(),
+                collection.as_deref(),
+            )?;
             if item_output_is_json(format) {
                 print_json(&summaries)
             } else {
@@ -805,13 +825,15 @@ fn run_cli(cli: Cli) -> Result<()> {
             );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::Tag { action, output } => {
+        Command::Collection { action, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            let before = backend.before_save()?;
-            let result = match action {
-                TagAction::Add { id, tags } => backend.change_tags(&id, &tags, true)?,
-                TagAction::Remove { id, tags } => backend.change_tags(&id, &tags, false)?,
+            let (id, changed, add) = match action {
+                CollectionAction::List => return list_collections(&mut backend, output.json),
+                CollectionAction::Add { id, collections } => (id, collections, true),
+                CollectionAction::Remove { id, collections } => (id, collections, false),
             };
+            let before = backend.before_save()?;
+            let result = backend.change_collections(&id, &changed, add)?;
             backend.after_save(
                 before,
                 HookOperation::ItemUpdate,
@@ -1065,6 +1087,29 @@ fn init(
     }
 }
 
+/// Print the collection tree, or its paths as JSON.
+///
+/// Human output nests on `/` the way the Connector picker does; JSON stays flat
+/// because a script wants the name it would pass back to `--collection`. Every
+/// path listed does match there, including a synthesized ancestor that no item
+/// belongs to directly, because `--collection` matches nested collections too.
+fn list_collections(backend: &mut Backend, json: bool) -> Result<()> {
+    let tree = collections::tree(backend.collections()?);
+    if json {
+        return print_json(
+            &tree
+                .iter()
+                .map(|target| target.path.as_str())
+                .collect::<Vec<_>>(),
+        );
+    }
+    for target in tree {
+        // Level 1 is the shallowest collection; the library root is not a row.
+        println!("{}{}", "  ".repeat(target.level - 1), target.name);
+    }
+    Ok(())
+}
+
 fn configured_layout(library: PathBuf, config: Option<&Config>) -> Result<LibraryLayout> {
     let attachments = config
         .filter(|config| absolutize(&config.library).is_ok_and(|path| path == library))
@@ -1081,16 +1126,16 @@ fn matches_item(
     item: &CatalogItem,
     query: Option<&str>,
     entry_type: Option<&str>,
-    tag: Option<&str>,
+    collection: Option<&str>,
 ) -> bool {
     if entry_type.is_some_and(|entry_type| !item.entry_type.eq_ignore_ascii_case(entry_type)) {
         return false;
     }
-    if tag.is_some_and(|tag| {
+    if collection.is_some_and(|collection| {
         !item
-            .tags
+            .collections
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(tag))
+            .any(|candidate| collections::matches(candidate, collection))
     }) {
         return false;
     }
@@ -1463,7 +1508,12 @@ mod tests {
                     })
                     .unwrap();
                 backend
-                    .change_tags(&added.uuid.to_string(), &["remote".to_owned()], true)
+                    .change_collections(&added.uuid.to_string(), &["remote".to_owned()], true)
+                    .unwrap();
+                // Re-adding under a different spelling must not create a second
+                // collection, in either mode.
+                backend
+                    .change_collections(&added.uuid.to_string(), &[" REMOTE ".to_owned()], true)
                     .unwrap();
                 let attached = backend
                     .attach(
@@ -1504,9 +1554,22 @@ mod tests {
                 .map(|field| field.value.as_str()),
             Some("After")
         );
-        assert_eq!(item.tags, vec!["remote"]);
+        assert_eq!(
+            item.collections,
+            vec!["remote"],
+            "a case- and space-variant re-add is a no-op keeping the first spelling"
+        );
         assert_eq!(item.attachments[0].uuid, Some(attachment_uuid));
         assert_eq!(item, daemon_item);
+
+        // The same re-add through the direct backend must agree.
+        direct
+            .change_collections(&item_uuid.to_string(), &["Remote".to_owned()], true)
+            .unwrap();
+        assert_eq!(
+            direct.get(&item_uuid.to_string()).unwrap().collections,
+            vec!["remote"]
+        );
         assert_eq!(
             direct
                 .list(Some("After"), Some("ARTICLE"), Some("remote"))
@@ -1624,7 +1687,46 @@ mod tests {
         assert!(Cli::try_parse_from(["lantai", "show", "item", "--json"]).is_err());
         assert!(Cli::try_parse_from(["lantai", "health", "--json"]).is_ok());
         assert!(
-            Cli::try_parse_from(["lantai", "tag", "add", "item", "reviewed", "--json"]).is_ok()
+            Cli::try_parse_from(["lantai", "collection", "add", "item", "Reviewed", "--json"])
+                .is_ok()
         );
+    }
+
+    #[test]
+    fn list_filters_by_collection() {
+        let parsed =
+            Cli::try_parse_from(["lantai", "list", "--collection", "Projects/IfT"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::List {
+                collection: Some(ref collection),
+                ..
+            } if collection == "Projects/IfT"
+        ));
+        assert!(Cli::try_parse_from(["lantai", "list", "--type", "article"]).is_ok());
+        assert!(Cli::try_parse_from(["lantai", "add", "--type", "article"]).is_ok());
+    }
+
+    /// Whatever `collection list` prints must find items again.
+    #[test]
+    fn every_listed_collection_matches_the_items_it_covers() {
+        let item = CatalogItem {
+            uuid: None,
+            citation_key: "filed".to_owned(),
+            entry_type: "article".to_owned(),
+            fields: Vec::new(),
+            collections: vec!["Projects / IfT".to_owned()],
+            attachments: Vec::new(),
+        };
+        // The tree synthesizes "Projects" and trims the spelling to
+        // "Projects/IfT"; both are offered to the user, so both must filter.
+        for target in collections::tree(collections::of_items([item.collections.clone()])) {
+            assert!(
+                matches_item(&item, None, None, Some(&target.path)),
+                "{} was listed but matches nothing",
+                target.path
+            );
+        }
+        assert!(!matches_item(&item, None, None, Some("Projects/Other")));
     }
 }

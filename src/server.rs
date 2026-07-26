@@ -78,7 +78,7 @@ struct ListQuery {
     q: Option<String>,
     #[serde(rename = "type")]
     entry_type: Option<String>,
-    tag: Option<String>,
+    collection: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,7 +104,7 @@ struct PatchItemRequest {
     set_raw: BTreeMap<String, String>,
     #[serde(default)]
     unset: Vec<String>,
-    tags: Option<Vec<String>>,
+    collections: Option<Vec<String>>,
     citation_key: Option<String>,
 }
 
@@ -479,7 +479,7 @@ async fn patch_item(
                 set: request.set,
                 set_raw: request.set_raw,
                 unset: request.unset,
-                tags: request.tags,
+                collections: request.collections,
                 citation_key: request.citation_key,
             },
         )
@@ -923,11 +923,11 @@ fn matches_query(item: &CatalogItem, query: &ListQuery) -> bool {
     {
         return false;
     }
-    if query.tag.as_ref().is_some_and(|tag| {
+    if query.collection.as_ref().is_some_and(|collection| {
         !item
-            .tags
+            .collections
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(tag))
+            .any(|candidate| crate::collections::matches(candidate, collection))
     }) {
         return false;
     }
@@ -1207,7 +1207,7 @@ mod tests {
         let item_id = body["uuid"].as_str().unwrap();
         assert_eq!(body["title"], "A Sketch");
         assert!(body["fields"].is_array());
-        assert_eq!(body["tags"], json!([]));
+        assert_eq!(body["collections"], json!([]));
         assert_eq!(body["attachments"], json!([]));
         assert_eq!(
             new_etag,
@@ -1305,7 +1305,7 @@ mod tests {
         let filtered = app
             .oneshot(authorized(
                 "GET",
-                "/api/v1/items?q=needle&type=ARTICLE&tag=KEEP",
+                "/api/v1/items?q=needle&collection=KEEP",
                 Body::empty(),
             ))
             .await
@@ -1315,10 +1315,16 @@ mod tests {
         let body = to_bytes(filtered.into_body(), usize::MAX).await.unwrap();
         let body: JsonValue = serde_json::from_slice(&body).unwrap();
         let items = body["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["citation_key"], "first");
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item["citation_key"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["first", "third"],
+            "entry type is no longer a filter"
+        );
         assert_eq!(items[0]["title"], "Needle");
-        assert_eq!(items[0]["tags"], json!(["keep"]));
+        assert_eq!(items[0]["collections"], json!(["keep"]));
         assert_eq!(items[0]["attachments"][0]["uuid"], JsonValue::Null);
         assert_eq!(items[0]["attachments"][0]["path"], "/tmp/first.pdf");
         assert!(

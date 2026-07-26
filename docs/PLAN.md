@@ -27,7 +27,7 @@ The binary provides:
 - CLI bibliography CRUD, search, attachment management, validation, formatting, and export
 - Safe coexistence with external `.bib` editing
 
-One library with tags is supported. Collections, notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope. Importing a Zotero RDF export flattens collection membership into path-style tags instead of introducing a collection model, and drops notes. The Connector's collection picker reads those tags back as a tree, so collections exist as a view rather than as stored state.
+One library with collections is supported. A collection is a name stored in BibLaTeX `keywords`, nested by spelling it with `/`; there is no collection object, and membership is the only record one has. There is deliberately no second notion of a "tag": one namespace, one word for it. Notes, readers, Word integration, cloud sync, formatted citations, metadata recognition, and automatic deduplication remain out of scope. Importing a Zotero RDF export maps collection membership onto that namespace and imports neither Zotero's own tags nor its notes. Browser capture matches that rule: the Zotero `tags` array a translator sends is not consulted at all. Collections reach `map_item` out of band, as an explicit field the Connector fills from the save popup's target and the RDF importer fills from collection membership, so a change to tag handling cannot silently unfile items. A name the user types in the popup arrives later through `updateSession` and does file the item.
 
 ## Implementation
 
@@ -48,12 +48,12 @@ One library with tags is supported. Collections, notes, readers, Word integratio
   explicit import/format operation; merely reading an externally added entry
   does not rewrite the file.
 - Generate new keys as normalized ASCII `AuthorYearTitle`, for example `lovelace1843sketch`; use `anon`, `nd`, and `item` fallbacks and append `a`, `b`, etc. on collision. Never regenerate a key after creation.
-- Preserve source entry order and append new entries. Canonicalize entry syntax, indentation, managed field names/order, creator syntax, dates, identifiers, tags, and attachment references.
+- Preserve source entry order and append new entries. Canonicalize entry syntax, indentation, managed field names/order, creator syntax, dates, identifiers, collections, and attachment references.
 - Normalize most bibliographic fields after external edits. Preserve exact raw value expressions for `abstract`, `annotation`, `note`, and unknown/custom fields. Preserve comments, `@string`, and `@preamble` blocks in source order.
 - An explicit CLI/REST update to a raw field replaces its expression; unrelated writes retain it exactly.
 - Adapt Zotero’s BibLaTeX type/field mapping for every Connector item type. Preserve otherwise unmapped scalar Zotero fields as managed `zotero-*` custom fields rather than silently dropping them.
 - Reuse that mapping for Zotero RDF import by translating RDF into the same Connector item shape, rather than maintaining a second field table. Read container-level identifiers, since Zotero records a conference paper’s DOI and ISBN on the proceedings rather than the item, and rewrite the locale-rendered `dc:date` as ISO 8601.
-- Store tags in normalized `keywords`: trim, remove exact duplicates, preserve spelling/case, and sort case-insensitively.
+- Store collections in normalized `keywords`: trim, remove exact duplicates, preserve spelling/case, and sort case-insensitively.
 - Allow duplicate bibliographic records. Enforce UUID and citation-key
   uniqueness for Lantai-created mutations, but retain duplicate keys introduced
   by external edits for `check` to report. A duplicate key cannot identify an
@@ -102,9 +102,9 @@ Implement:
 - `POST /connector/delaySync`
 - Empty compatibility responses for `getClientHostnames` and `proxies`
 
-`ping` advertises attachment upload, snapshots, associated-file download, and tag autocomplete; it advertises no notes, translator hashes, cloud features, or recognition. Standalone saves return `canRecognize: false`; attachment resolver checks return `false`; sync delay is a no-op.
+`ping` advertises attachment upload, snapshots, associated-file download, and name autocomplete; it advertises no notes, translator hashes, cloud features, or recognition. Standalone saves return `canRecognize: false`; attachment resolver checks return `false`; sync delay is a no-op.
 
-Expose the library root as Connector target `L1`, named “Lantai”, and derive the remaining save targets from the library's tags so the popup's collection picker works without a stored collection model. Nest on `/`, synthesizing ancestors the Connector needs to resolve a row's parent, and identify a target by hashing its path so it survives an unrelated tag appearing while the popup is open. `updateSession` resolves a target back to its tag, folds it into the tag rebase so retargeting moves rather than accumulates, and rejects nonempty notes. Because `saveItems` carries no target and the popup only calls `updateSession` on user edits, the daemon remembers the last chosen target for the life of the process and applies it to new captures, mirroring Zotero's own selected-collection behavior.
+Expose the library root as Connector target `L1`, named “Lantai”, and derive the remaining save targets from the library's collections. Nest on `/`, synthesizing ancestors the Connector needs to resolve a row's parent, and identify a target by hashing its path so it survives an unrelated collection appearing while the popup is open. The Connector protocol spells these `tags` on the wire; that is Zotero's name, not Lantai's, and only the wire keeps it. `updateSession` resolves a target back to its collection, folds it into the rebase so retargeting moves rather than accumulates, and rejects nonempty notes. Filtering by a collection matches everything nested under it, so the ancestors the picker synthesizes are usable filters rather than dead names. Because `saveItems` carries no target and the popup only calls `updateSession` on user edits, the daemon remembers the last chosen target for the life of the process and applies it to new captures, mirroring Zotero's own selected-collection behavior.
 
 Keep Connector save sessions in memory for ten minutes. Sessions map transient Connector item IDs to Lantai UUIDs and support subsequent binary and SingleFile attachment uploads.
 
@@ -127,9 +127,9 @@ Require `Authorization: Bearer <token>` on every `/api/v1/*` route. Return struc
 - `GET /api/v1/check`
 - `GET|DELETE /api/v1/trash`
 
-Item responses contain UUID, citation key, entry type, normalized fields, exact raw expressions for pass-through fields, tags, attachment metadata, and revision. `PATCH` supports normalized `set`, raw-field `set_raw`, `unset`, tag replacement, and citation-key rename. Mutations require `If-Match`; stale revisions return `409`.
+Item responses contain UUID, citation key, entry type, normalized fields, exact raw expressions for pass-through fields, collections, attachment metadata, and revision. `PATCH` supports normalized `set`, raw-field `set_raw`, `unset`, collection replacement, and citation-key rename. Mutations require `If-Match`; stale revisions return `409`.
 
-Item listing supports basic text search and tag/type filtering. Errors use a
+Item listing supports basic text search and collection/type filtering. Errors use a
 stable JSON code, a human-readable message, and optional structured details.
 
 ### CLI
@@ -137,10 +137,10 @@ stable JSON code, a human-readable message, and optional structured details.
 Provide:
 
 - `init`, `serve`, `health`
-- `list`, `show`
+- `list`, `show`, `collection list`
 - `add --from <file|->` or `add --type … --field name=value`
 - `import <file.rdf>` for Zotero RDF exports, including files and collections
-- `set`, `set-raw`, `unset`, `tag add`, `tag remove`
+- `set`, `set-raw`, `unset`, `collection add`, `collection remove`
 - `remove`, `attach`, `detach`
 - `export`, `format`, `check`
 - `trash list`, `trash purge`
@@ -149,8 +149,9 @@ Commands accept UUID or citation key. They use REST when the configured daemon i
 
 Unknown command names use Git-style extension dispatch: `lantai NAME` runs a
 `lantai-NAME` executable found on `PATH`. Official Bash extensions provide the
-documented table, rich-query, fuzzy-selection, attachment-opening, batch-tag,
-and direct REST workflows without expanding the built-in query language.
+documented table, rich-query, fuzzy-selection, attachment-opening,
+batch-collection, and direct REST workflows without expanding the built-in
+query language.
 
 `check` is diagnostic and never changes the library. Any future repair behavior
 must be exposed as an explicit operation.
@@ -167,7 +168,7 @@ must be exposed as an explicit operation.
 3. **Daemon and native REST:** expose authenticated CRUD/search/attachment
    routes, health, ETag conflicts, and CLI daemon/direct parity.
 4. **Zotero Connector:** implement loopback security and discovery first, then
-   item saves, attachment and snapshot flows, session tag updates, compatibility
+   item saves, attachment and snapshot flows, session collection updates, compatibility
    no-ops, and acceptance tests with the unpacked official extension.
 
 ## Test Plan
@@ -176,8 +177,8 @@ must be exposed as an explicit operation.
 - Property-test formatting idempotence and parse–format–parse semantic equivalence.
 - Test external edits to managed and raw fields, watcher reloads, concurrent hash conflicts, malformed-file degraded mode, and atomic-write recovery.
 - Test attachment streaming, filename sanitization, external references, detach/delete trash behavior, missing files, and interrupted temporary uploads.
-- Add protocol contract tests for all implemented Connector endpoints, headers, session mapping, binary uploads, SingleFile snapshots, target/tag updates, and browser-request rejection.
-- Run an end-to-end acceptance test with the unpacked official Connector: capture a translated article with PDF, save a plain webpage with SingleFile snapshot, save a directly viewed PDF, and change tags and the target collection in the progress popup.
+- Add protocol contract tests for all implemented Connector endpoints, headers, session mapping, binary uploads, SingleFile snapshots, target/collection updates, and browser-request rejection.
+- Run an end-to-end acceptance test with the unpacked official Connector: capture a translated article with PDF, save a plain webpage with SingleFile snapshot, save a directly viewed PDF, and change the target collection in the progress popup.
 - Test CLI direct fallback and daemon-backed operation against the same temporary bibliography, ensuring identical output and conflict behavior.
 
 ## Completion criteria
@@ -185,5 +186,5 @@ must be exposed as an explicit operation.
 Version 0.2.0 is complete when an unmodified Zotero Connector can save common web
 items and attachments into Lantai; the result remains a valid, human-editable
 BibLaTeX library; external edits are detected without losing unmanaged source
-text; item, tag, and attachment operations work through both CLI and REST; and
+text; item, collection, and attachment operations work through both CLI and REST; and
 the test suite demonstrates safe concurrent writes and daemon/direct parity.

@@ -165,7 +165,7 @@ fn field<'a>(item: &'a ItemView, name: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn import_creates_items_files_and_collection_tags() {
+fn import_creates_items_files_and_collections() {
     let fixture = Fixture::new();
 
     let output = fixture.import(&["--json"]);
@@ -197,9 +197,9 @@ fn import_creates_items_files_and_collection_tags() {
     );
     assert_eq!(field(paper, "author"), Some("Lovelace, Ada"));
     assert_eq!(
-        paper.tags,
+        paper.collections,
         ["Projects/Engines"],
-        "Zotero tags are not imported"
+        "Zotero's own tags are not imported"
     );
 
     assert_eq!(paper.attachments.len(), 1);
@@ -232,7 +232,10 @@ fn a_taken_citation_key_falls_back_to_a_generated_one() {
         "the existing entry keeps the key"
     );
     assert_eq!(book.citation_key, "anon2019uncollected");
-    assert!(book.tags.is_empty(), "an item in no collection has no tags");
+    assert!(
+        book.collections.is_empty(),
+        "an item in no collection belongs to none"
+    );
 
     let existing = find(&items, "rich");
     assert_eq!(existing.title.as_deref(), Some("An Existing Item"));

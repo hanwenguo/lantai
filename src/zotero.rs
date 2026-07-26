@@ -14,8 +14,16 @@ pub struct ZoteroItem {
     pub item_type: String,
     #[serde(default)]
     pub creators: Vec<ZoteroCreator>,
+    /// Zotero's tags. Accepted so the field does not land in `data`, and then
+    /// ignored: on this wire they are whatever a translator scraped, which
+    /// describes the paper rather than records a decision about it.
     #[serde(default)]
     pub tags: Vec<JsonValue>,
+    /// The collections this item joins. Never parsed from Zotero — the caller
+    /// sets it from the save popup's target or a Zotero RDF export's
+    /// membership, so a change to tag handling cannot silently unfile items.
+    #[serde(skip)]
+    pub collections: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<JsonValue>,
     #[serde(flatten)]
@@ -40,7 +48,6 @@ pub struct ZoteroCreator {
 pub struct MappedItem {
     pub connector_id: String,
     pub item: NewItem,
-    pub automatic_tags: Vec<String>,
 }
 
 pub fn map_item(source: ZoteroItem) -> Result<MappedItem> {
@@ -157,9 +164,9 @@ pub fn map_item(source: ZoteroItem) -> Result<MappedItem> {
         fields.insert("langid".to_owned(), map_language(&language));
     }
 
-    let tags = extract_tags(&source.tags);
-    if !tags.is_empty() {
-        fields.insert("keywords".to_owned(), tags.join(", "));
+    let collections = crate::collections::normalize(source.collections.iter().map(String::as_str));
+    if !collections.is_empty() {
+        fields.insert("keywords".to_owned(), collections.join(", "));
     }
     fields.insert("zotero-item-type".to_owned(), source.item_type.clone());
 
@@ -182,7 +189,6 @@ pub fn map_item(source: ZoteroItem) -> Result<MappedItem> {
             citation_key,
             fields: fields.into_iter().collect(),
         },
-        automatic_tags: tags,
     })
 }
 
@@ -391,27 +397,6 @@ fn map_creators(creators: &[ZoteroCreator], fields: &mut BTreeMap<String, String
     }
 }
 
-fn extract_tags(tags: &[JsonValue]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut tags = tags
-        .iter()
-        .filter_map(|value| {
-            value.as_str().map(str::to_owned).or_else(|| {
-                value
-                    .as_object()
-                    .and_then(|value| value.get("tag"))
-                    .and_then(JsonValue::as_str)
-                    .map(str::to_owned)
-            })
-        })
-        .map(|tag| tag.trim().to_owned())
-        .filter(|tag| !tag.is_empty())
-        .filter(|tag| seen.insert(tag.to_ascii_lowercase()))
-        .collect::<Vec<_>>();
-    tags.sort_by_key(|tag| tag.to_ascii_lowercase());
-    tags
-}
-
 fn map_scalar(
     data: &BTreeMap<String, JsonValue>,
     fields: &mut BTreeMap<String, String>,
@@ -549,7 +534,11 @@ mod tests {
             "publicationTitle": "Scientific Memoirs",
             "journalAbbreviation": "Sci. Mem.",
             "DOI": "10.1000/example",
-            "tags": [{"tag": "History", "type": 1}, "Computing"],
+            "tags": [
+                {"tag": "Scraped Keyword", "type": 1},
+                {"tag": "History", "type": 0},
+                "Computing"
+            ],
             "customScalar": "retained",
             "relations": {"ignored": true}
         }))
@@ -558,15 +547,66 @@ mod tests {
         let mapped = map_item(source).unwrap();
         let fields = mapped.item.fields.into_iter().collect::<BTreeMap<_, _>>();
         assert_eq!(mapped.item.entry_type, "article");
+        assert!(
+            !fields.contains_key("keywords"),
+            "nothing in the wire tags array becomes a collection"
+        );
         assert_eq!(fields["author"], "Lovelace, Ada");
         assert_eq!(fields["editor"], "{Analytical Society}");
         assert_eq!(fields["journaltitle"], "Scientific Memoirs");
         assert_eq!(fields["shortjournal"], "Sci. Mem.");
         assert_eq!(fields["doi"], "10.1000/example");
         assert_eq!(fields["date"], "1843");
-        assert_eq!(fields["keywords"], "Computing, History");
         assert_eq!(fields["zotero-custom-scalar"], "retained");
         assert!(!fields.contains_key("zotero-relations"));
+    }
+
+    #[test]
+    fn collections_come_from_the_caller_not_from_zotero_tags() {
+        let item = |tags: serde_json::Value, collections: &[&str]| {
+            let mut source: ZoteroItem = serde_json::from_value(serde_json::json!({
+                "id": "connector-1",
+                "itemType": "journalArticle",
+                "title": "A Sketch",
+                "tags": tags
+            }))
+            .unwrap();
+            source.collections = collections.iter().map(|name| (*name).to_owned()).collect();
+            map_item(source)
+                .unwrap()
+                .item
+                .fields
+                .into_iter()
+                .collect::<BTreeMap<_, _>>()
+                .remove("keywords")
+        };
+
+        // Every encoding a translator might use, and none of them file the item.
+        assert_eq!(
+            item(
+                serde_json::json!([
+                    {"tag": "cs.LG", "type": 1},
+                    {"tag": "Economics", "type": 0},
+                    {"tag": "Physics", "type": "1"},
+                    "Machine Learning"
+                ]),
+                &[]
+            ),
+            None
+        );
+        assert_eq!(
+            item(serde_json::json!([{"tag": "cs.LG", "type": 1}]), &["Inbox"]),
+            Some("Inbox".to_owned()),
+            "the caller's choice is unaffected by whatever the translator sent"
+        );
+        assert_eq!(
+            item(
+                serde_json::json!([]),
+                &[" Reading ", "READING", "", "Projects/IfT"]
+            ),
+            Some("Projects/IfT, Reading".to_owned()),
+            "memberships are trimmed, deduplicated, and ordered"
+        );
     }
 
     #[test]

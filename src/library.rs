@@ -55,7 +55,7 @@ pub struct ItemPatch {
     pub set: BTreeMap<String, String>,
     pub set_raw: BTreeMap<String, String>,
     pub unset: Vec<String>,
-    pub tags: Option<Vec<String>>,
+    pub collections: Option<Vec<String>>,
     pub citation_key: Option<String>,
 }
 
@@ -381,9 +381,9 @@ impl LibraryStore {
         if let Some(key) = patch.citation_key.as_deref() {
             validate_citation_key(key)?;
         }
-        let tags = patch
-            .tags
-            .map(|tags| normalize_tag_list(tags.iter().map(String::as_str)));
+        let collections = patch.collections.map(|collections| {
+            crate::collections::normalize(collections.iter().map(String::as_str))
+        });
 
         self.mutate_source(|source| {
             let (mut working_source, uuid) = self.adopt_identity(source, id)?;
@@ -403,8 +403,11 @@ impl LibraryStore {
             for (name, value) in &set {
                 set_literal_field(entry, name, value);
             }
-            if let Some(tags) = tags.as_ref().filter(|tags| !tags.is_empty()) {
-                set_literal_field(entry, "keywords", &tags.join(", "));
+            if let Some(collections) = collections
+                .as_ref()
+                .filter(|collections| !collections.is_empty())
+            {
+                set_literal_field(entry, "keywords", &collections.join(", "));
             }
             if let Some(key) = patch.citation_key.as_deref() {
                 entry.rename_key(Cow::Owned(key.to_owned()));
@@ -412,7 +415,7 @@ impl LibraryStore {
             let citation_key = entry.key().to_owned();
             let stage_one = render_preserved_document(&document, &self.layout.bibliography)?;
 
-            let remove_keywords = tags.as_ref().is_some_and(Vec::is_empty);
+            let remove_keywords = collections.as_ref().is_some_and(Vec::is_empty);
             if patch.unset.is_empty() && !remove_keywords {
                 return Ok((stage_one, MutationResult { uuid, citation_key }));
             }
@@ -446,16 +449,16 @@ impl LibraryStore {
         })
     }
 
-    pub fn add_tags(&self, id: &str, tags: &[String]) -> Result<MutationResult> {
-        self.change_tags(id, tags, true)
+    pub fn add_collections(&self, id: &str, collections: &[String]) -> Result<MutationResult> {
+        self.change_collections(id, collections, true)
     }
 
-    pub fn remove_tags(&self, id: &str, tags: &[String]) -> Result<MutationResult> {
-        self.change_tags(id, tags, false)
+    pub fn remove_collections(&self, id: &str, collections: &[String]) -> Result<MutationResult> {
+        self.change_collections(id, collections, false)
     }
 
-    /// Replace session-owned tags while retaining tags added by translators or external edits.
-    pub fn rebase_tags(
+    /// Replace session-owned collections while retaining any added by translators or external edits.
+    pub fn rebase_collections(
         &self,
         id: &str,
         previous: &[String],
@@ -463,21 +466,23 @@ impl LibraryStore {
     ) -> Result<MutationResult> {
         let previous = previous
             .iter()
-            .map(|tag| tag.trim().to_ascii_lowercase())
+            .map(|collection| collection.trim().to_ascii_lowercase())
             .collect::<HashSet<_>>();
-        let replacement = normalize_tag_list(replacement.iter().map(String::as_str));
+        let replacement = crate::collections::normalize(replacement.iter().map(String::as_str));
         self.mutate_item(id, |document, index, uuid| {
             let entry = &mut document.entries_mut()[index];
-            let mut tags = entry
+            let mut collections = entry
                 .get_as_string_ignore_case("keywords")
-                .map_or_else(Vec::new, |value| normalize_tag_list(value.split(',')));
-            tags.retain(|tag| !previous.contains(&tag.to_ascii_lowercase()));
-            tags.extend(replacement.iter().cloned());
-            tags = normalize_tag_list(tags.iter().map(String::as_str));
-            if tags.is_empty() {
+                .map_or_else(Vec::new, |value| {
+                    crate::collections::normalize(value.split(','))
+                });
+            collections.retain(|collection| !previous.contains(&collection.to_ascii_lowercase()));
+            collections.extend(replacement.iter().cloned());
+            collections = crate::collections::normalize(collections.iter().map(String::as_str));
+            if collections.is_empty() {
                 remove_fields_ignore_case(entry, "keywords");
             } else {
-                set_literal_field(entry, "keywords", &tags.join(", "));
+                set_literal_field(entry, "keywords", &collections.join(", "));
             }
             Ok(MutationResult {
                 uuid,
@@ -905,27 +910,34 @@ impl LibraryStore {
         Ok(report)
     }
 
-    fn change_tags(&self, id: &str, changed: &[String], add: bool) -> Result<MutationResult> {
-        let changed = normalize_tag_list(changed.iter().map(String::as_str));
+    fn change_collections(
+        &self,
+        id: &str,
+        changed: &[String],
+        add: bool,
+    ) -> Result<MutationResult> {
+        let changed = crate::collections::normalize(changed.iter().map(String::as_str));
         self.mutate_item(id, |document, index, uuid| {
             let entry = &mut document.entries_mut()[index];
-            let mut tags = entry
+            let mut collections = entry
                 .get_as_string_ignore_case("keywords")
-                .map_or_else(Vec::new, |value| normalize_tag_list(value.split(',')));
+                .map_or_else(Vec::new, |value| {
+                    crate::collections::normalize(value.split(','))
+                });
             if add {
-                tags.extend(changed.iter().cloned());
+                collections.extend(changed.iter().cloned());
             } else {
-                tags.retain(|tag| {
+                collections.retain(|collection| {
                     !changed
                         .iter()
-                        .any(|removed| removed.eq_ignore_ascii_case(tag))
+                        .any(|removed| removed.eq_ignore_ascii_case(collection))
                 });
             }
-            tags = normalize_tag_list(tags.iter().map(String::as_str));
-            if tags.is_empty() {
+            collections = crate::collections::normalize(collections.iter().map(String::as_str));
+            if collections.is_empty() {
                 remove_fields_ignore_case(entry, "keywords");
             } else {
-                set_literal_field(entry, "keywords", &tags.join(", "));
+                set_literal_field(entry, "keywords", &collections.join(", "));
             }
             Ok(MutationResult {
                 uuid,
@@ -1526,19 +1538,6 @@ fn apply_replacements(
     Ok(output)
 }
 
-fn normalize_tag_list<'a>(tags: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut tags = tags
-        .into_iter()
-        .map(str::trim)
-        .filter(|tag| !tag.is_empty())
-        .filter(|tag| seen.insert((*tag).to_owned()))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    tags.sort_by_key(|tag| tag.to_lowercase());
-    tags
-}
-
 fn normalize_managed_fields(entry: &mut ParsedEntry<'_>) -> Result<()> {
     normalize_field_aliases_and_legacy_date(entry);
     let mut replacements = BTreeMap::new();
@@ -1790,11 +1789,11 @@ fn normalize_keywords(entry: &mut ParsedEntry<'_>) {
     let Some(value) = entry.get_as_string_ignore_case("keywords") else {
         return;
     };
-    let tags = normalize_tag_list(value.split(','));
-    if tags.is_empty() {
+    let collections = crate::collections::normalize(value.split(','));
+    if collections.is_empty() {
         remove_fields_ignore_case(entry, "keywords");
     } else {
-        set_literal_field(entry, "keywords", &tags.join(", "));
+        set_literal_field(entry, "keywords", &collections.join(", "));
     }
 }
 
@@ -2289,7 +2288,7 @@ mod tests {
         citation_key: String,
         entry_type: String,
         fields: BTreeMap<String, String>,
-        tags: Vec<String>,
+        collections: Vec<String>,
         attachments: Vec<Attachment>,
     }
 
@@ -2335,7 +2334,7 @@ mod tests {
                     citation_key: item.citation_key,
                     entry_type: item.entry_type,
                     fields,
-                    tags: item.tags,
+                    collections: item.collections,
                     attachments: item.attachments,
                 }
             })
@@ -2582,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    fn unset_and_tags_share_the_safe_mutation_path() {
+    fn unset_and_collections_share_the_safe_mutation_path() {
         let directory = tempfile::tempdir().unwrap();
         let bibliography = directory.path().join("references.bib");
         fs::write(
@@ -2600,9 +2599,11 @@ mod tests {
         let store = LibraryStore::new(layout);
 
         store
-            .add_tags("tagged", &["beta".to_owned(), "Alpha".to_owned()])
+            .add_collections("tagged", &["beta".to_owned(), "Alpha".to_owned()])
             .unwrap();
-        store.remove_tags("tagged", &["ZETA".to_owned()]).unwrap();
+        store
+            .remove_collections("tagged", &["ZETA".to_owned()])
+            .unwrap();
         store.unset_fields("tagged", &["title".to_owned()]).unwrap();
         let output = fs::read_to_string(bibliography).unwrap();
 
@@ -2611,7 +2612,7 @@ mod tests {
     }
 
     #[test]
-    fn tag_rebase_retains_translator_and_external_tags() {
+    fn collection_rebase_retains_translator_and_external_names() {
         let directory = tempfile::tempdir().unwrap();
         let bibliography = directory.path().join("references.bib");
         fs::write(
@@ -2627,7 +2628,7 @@ mod tests {
         let store = LibraryStore::new(LibraryLayout::new(bibliography.clone()).unwrap());
 
         store
-            .rebase_tags(
+            .rebase_collections(
                 "tagged",
                 &["previous".to_owned()],
                 &["replacement".to_owned()],
@@ -2639,7 +2640,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_applies_raw_literal_unset_tags_and_key_in_one_mutation() {
+    fn patch_applies_raw_literal_unset_collections_and_key_in_one_mutation() {
         let directory = tempfile::tempdir().unwrap();
         let bibliography = directory.path().join("references.bib");
         fs::write(
@@ -2668,7 +2669,7 @@ mod tests {
                         "\"new \" # {expression}".to_owned(),
                     )]),
                     unset: vec!["note".to_owned()],
-                    tags: Some(vec!["zeta".to_owned(), "Alpha".to_owned()]),
+                    collections: Some(vec!["zeta".to_owned(), "Alpha".to_owned()]),
                     citation_key: Some("after".to_owned()),
                 },
             )

@@ -27,8 +27,8 @@ lantai show vaswani2023attention --format human
 
 `lantai list` returns an array in bibliography source order. `lantai show`
 returns one object with the same shape. See the canonical [public item JSON
-schema](library-model.md#public-item-json) for fields, raw expressions, tags,
-attachments, ordering, and nullable identities.
+schema](library-model.md#public-item-json) for fields, raw expressions,
+collections, attachments, ordering, and nullable identities.
 
 ## Render a table
 
@@ -36,13 +36,14 @@ attachments, ordering, and nullable identities.
 
 ```sh
 lantai table
-lantai table attention --type online --tag machine-learning
+lantai table attention --type online --collection "Machine Learning"
 ```
 
 All arguments are forwarded to the built-in `list`. Lantai's query is a
 case-insensitive substring match over citation keys and expanded fields;
-`--type` and `--tag` are case-insensitive exact matches. Supplied
-filters are combined with AND.
+`--type` is a case-insensitive exact match and `--collection` matches that
+collection and everything nested under it. Supplied filters are combined with
+AND.
 
 ## Query with rich conditions
 
@@ -55,7 +56,7 @@ lantai query '
   (($fields.author // "") | test("lovelace"; "i"))
   and (($fields.date // "") | startswith("1843"))
   and (($fields.doi // "") != "")
-  and any(.tags[]?; ascii_downcase == "history")
+  and any(.collections[]?; ascii_downcase == "history")
 ' -- --type article
 ```
 
@@ -71,7 +72,7 @@ original `fields` array is never changed.
 It emits the selected JSON object:
 
 ```sh
-lantai pick -- --tag machine-learning | jq
+lantai pick -- --collection "Machine Learning" | jq
 ```
 
 For a query-then-mutate interface, request only the stable identifier:
@@ -79,7 +80,7 @@ For a query-then-mutate interface, request only the stable identifier:
 ```sh
 item_id=$(lantai pick --id-only -- attention --type online)
 if [ -n "$item_id" ]; then
-  lantai tag add "$item_id" reviewed
+  lantai collection add "$item_id" Reviewed
 fi
 ```
 
@@ -99,7 +100,7 @@ lantai open -- --type article
 To compose with a different application without launching anything:
 
 ```sh
-attachment_path=$(lantai open --print -- --tag needs-review)
+attachment_path=$(lantai open --print -- --collection needs-review)
 if [ -n "$attachment_path" ]; then
   printf '%s\n' "$attachment_path"
 fi
@@ -108,29 +109,29 @@ fi
 Cancellation succeeds without output. Paths are always passed as a single
 quoted argument; managed filenames are also sanitized by Lantai.
 
-## Preview and apply a batch tag
+## Preview and apply a batch membership change
 
-`batch-tag` snapshots the matching records and prints their UUID, key, and
-title. Without `--apply` it never mutates the library:
+`batch-collection` snapshots the matching records and prints their UUID, key,
+and title. Without `--apply` it never mutates the library:
 
 ```sh
-lantai batch-tag reviewed '
+lantai batch-collection Reviewed '
   .entry_type == "article"
-  and any(.tags[]?; ascii_downcase == "needs-review")
+  and any(.collections[]?; ascii_downcase == "needs-review")
 '
 ```
 
 After reviewing the same command, add `--apply`:
 
 ```sh
-lantai batch-tag --apply reviewed '
+lantai batch-collection --apply Reviewed '
   .entry_type == "article"
-  and any(.tags[]?; ascii_downcase == "needs-review")
+  and any(.collections[]?; ascii_downcase == "needs-review")
 '
 ```
 
 Application is refused before any mutation if a selected record lacks a UUID.
-Otherwise items are tagged sequentially by UUID and processing stops at the
+Otherwise items are added sequentially by UUID and processing stops at the
 first failure. These are separate locked Lantai mutations, not one atomic batch.
 
 ## Query the REST API

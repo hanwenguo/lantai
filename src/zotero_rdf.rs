@@ -159,14 +159,7 @@ fn read_item(
         )
         .collect();
 
-    let tags = memberships
-        .get(about)
-        .map(|tags| {
-            tags.iter()
-                .map(|tag| JsonValue::String(tag.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let collections = memberships.get(about).cloned().unwrap_or_default();
 
     RdfItem {
         item: ZoteroItem {
@@ -177,7 +170,9 @@ fn read_item(
             },
             item_type,
             creators,
-            tags,
+            // Zotero's own `dc:subject` tags are not imported.
+            tags: Vec::new(),
+            collections,
             attachments: Vec::new(),
             data,
         },
@@ -261,7 +256,7 @@ fn read_item_child(
                 links.push(reference.to_owned());
             }
         }
-        // `dc:subject` tags and Zotero notes are intentionally not imported.
+        // Zotero's own `dc:subject` tags and its notes are not imported.
         () => {}
     }
 }
@@ -441,8 +436,8 @@ fn attachment_title(node: Node<'_, '_>) -> String {
 
 /// Resolve every collection into a `parent/child` path.
 ///
-/// Returns the tags to apply per member identifier, and every path in the
-/// export including collections that only contain other collections.
+/// Returns the collections to apply per member identifier, and every path in
+/// the export including collections that only contain other collections.
 fn collection_memberships(
     collections: &[Node<'_, '_>],
 ) -> (HashMap<String, Vec<String>>, Vec<String>) {
@@ -456,7 +451,7 @@ fn collection_memberships(
         let name = descendant(*node, DC, "title")
             .and_then(text)
             .unwrap_or_else(|| "Untitled".to_owned());
-        // Lantai splits `keywords` on commas, so a comma cannot survive in a tag.
+        // Lantai splits `keywords` on commas, so a comma cannot survive in a name.
         names.insert(about, name.replace(',', " "));
         members.insert(
             about,

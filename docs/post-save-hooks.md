@@ -53,7 +53,7 @@ environment, so configure only trusted executables.
       "entry_type": "article",
       "title": "A Sketch of the Analytical Engine",
       "fields": [],
-      "tags": [],
+      "collections": [],
       "attachments": []
     }
   ],
@@ -82,7 +82,7 @@ Formatting includes all current items. Removal has no current item and uses
 | --- | --- | --- |
 | `item.create` | CLI/REST create; Connector item, webpage, or standalone save | Created items |
 | `item.import` | CLI/REST BibLaTeX import; CLI Zotero RDF import | All imported items |
-| `item.update` | Field, key, tag, or Connector popup tag change | Updated items |
+| `item.update` | Field, key, collection, or Connector popup collection change | Updated items |
 | `item.delete` | Item removal | Tombstone in `removed_items` |
 | `attachment.create` | CLI/REST attach or Connector child/snapshot upload | Parent item after attachment |
 | `attachment.delete` | Managed attachment detach | Parent item after detach |
@@ -95,7 +95,8 @@ reads, checks, exports, and trash purging do not run it.
 
 The Connector provides no unambiguous “capture complete” request. One visible
 capture can therefore produce an `item.create` event, one or more
-`attachment.create` events, and a later `item.update` for popup tags. Lantai
+`attachment.create` events, and a later `item.update` for the popup's chosen
+collection. Lantai
 does not delay or heuristically coalesce these requests. Filter by `operation`
 when work should happen only after initial metadata creation.
 

@@ -21,10 +21,8 @@ directory, normally `~/.cargo/bin`. Ensure that directory is on `PATH`.
 
 ## Initialize a library
 
-Choose the `.bib` file that will be the library:
-
 ```sh
-lantai --library "$HOME/Documents/references.bib" init
+lantai init --library "$HOME/Documents/references.bib"
 ```
 
 `init` creates or adopts the bibliography, creates its managed attachment
@@ -32,15 +30,14 @@ directory, and writes a configuration file containing a random REST bearer
 token. It never truncates an existing bibliography. It refuses to replace an
 existing configuration unless `--force` is supplied.
 
-By default, `references.bib` uses `references.files/` beside it. To put managed
-attachments elsewhere:
+To put managed attachments elsewhere:
 
 ```sh
-lantai --library "$HOME/Documents/references.bib" init \
+lantai init --library "$HOME/Documents/references.bib" \
   --attachments "$HOME/Documents/reference-files"
 ```
 
-The human output prints all three selected paths. `init --json` returns:
+`init --json` returns:
 
 ```json
 {
@@ -51,9 +48,25 @@ The human output prints all three selected paths. `init --json` returns:
 }
 ```
 
-`init` prints the path it used. See [configuration](configuration.md) for that
-file's location, its settings, and how to point a single command at a different
-library.
+Once a library is configured, ordinary commands need no arguments about it. See
+[configuration](configuration.md) for the settings file, its location, and how
+to point a single command at a different library.
+
+## First records
+
+```sh
+lantai add --type article \
+  --field 'author=Lovelace, Ada' \
+  --field date=1843 \
+  --field 'title=A Sketch of the Analytical Engine'
+
+lantai list
+lantai show lovelace1843sketch
+lantai collection add lovelace1843sketch History/Computing
+lantai collection list
+lantai attach lovelace1843sketch ./paper.pdf --mime application/pdf
+lantai export lovelace1843sketch --output selected.bib
+```
 
 ## Direct and daemon-backed CLI operation
 
@@ -88,7 +101,7 @@ user service manager. Stop it with the normal process interrupt, usually
 Control-C. Zotero and Lantai cannot simultaneously own port 23119; quit Zotero
 before starting Lantai. See [Connector setup](zotero-connector.md).
 
-Verify the selected paths and parsed library:
+Verify the selected paths and the parsed library:
 
 ```sh
 lantai health
@@ -100,19 +113,5 @@ lantai check
 accessible. `check` performs the detailed integrity diagnostics described in
 [Operations and troubleshooting](operations.md).
 
-## First records
-
-```sh
-lantai add --type article \
-  --field 'author=Lovelace, Ada' \
-  --field date=1843 \
-  --field 'title=A Sketch of the Analytical Engine'
-
-lantai list
-lantai show lovelace1843sketch
-lantai tag add lovelace1843sketch history computing
-lantai attach lovelace1843sketch ./paper.pdf --mime application/pdf
-lantai export lovelace1843sketch --output selected.bib
-```
-
-Continue with the [library model](library-model.md) and [CLI reference](cli-reference.md).
+Continue with the [library model](library-model.md) and [CLI
+reference](cli-reference.md).
