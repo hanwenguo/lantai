@@ -32,6 +32,11 @@ pub enum Error {
     )]
     InitLibraryRequired,
 
+    #[error(
+        "the running daemon is version {daemon} but this is lantai {cli}; restart `lantai serve`"
+    )]
+    DaemonVersionMismatch { daemon: String, cli: String },
+
     #[error("could not read the answer: {source}")]
     Prompt {
         #[source]

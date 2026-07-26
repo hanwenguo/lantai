@@ -103,6 +103,7 @@ Returns `200` even when the library is degraded:
 ```json
 {
   "status": "ok",
+  "version": "0.2.0",
   "revision": "...",
   "entries": 42,
   "warnings": 1,
@@ -116,6 +117,10 @@ Returns `200` even when the library is degraded:
 This endpoint is a cheap liveness probe answered from the cache; for the full
 diagnostic report use [`GET /api/v1/check`](#get-apiv1check).
 
+`version` is the daemon's own version. The CLI compares it on connect and
+refuses to use a daemon that does not match, rather than exchanging field names
+the other side may spell differently.
+
 ### `GET /api/v1/items`
 
 Optional query parameters:
@@ -125,7 +130,10 @@ Optional query parameters:
 | `q` | Case-insensitive substring in citation key or expanded field values |
 | `collection` | The collection and everything nested under it, case-insensitively |
 
-Unknown parameters are ignored. Both supplied filters are ANDed. The response preserves bibliography order:
+Unknown parameters are rejected with `400`, so a client still sending the
+removed `tag` or `type` filters fails loudly instead of receiving the whole
+library. Both supplied filters are ANDed. The response preserves bibliography
+order:
 
 ```json
 {"items": [], "revision": "..."}
@@ -179,8 +187,10 @@ Requires `If-Match`. All members are optional and are applied together:
 
 `set` stores literals, `set_raw` stores validated BibTeX expressions, `unset`
 removes fields, `collections` replaces the complete membership list, and
-`citation_key` renames the key. Duplicate/conflicting field actions are rejected. Returns
-`200` with the complete updated item and revision.
+`citation_key` renames the key. Unknown fields — including the former `tags`
+spelling — are rejected with `422` rather than ignored. Duplicate/conflicting
+field actions are rejected. Returns `200` with the complete updated item and
+revision.
 
 ### `DELETE /api/v1/items/{id}`
 

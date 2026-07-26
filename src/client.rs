@@ -24,6 +24,10 @@ const IF_MATCH: &str = "If-Match";
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ApiHealth {
     pub status: String,
+    /// Absent from daemons older than the field itself, which is exactly the
+    /// case worth refusing.
+    #[serde(default)]
+    pub version: Option<String>,
     pub revision: String,
     pub entries: usize,
     pub warnings: usize,
@@ -117,6 +121,19 @@ impl ApiClient {
             Err(error) => return Err(client.transport_error(error)),
         };
         let health: ApiHealth = client.decode(response)?;
+        // A daemon of another version may spell the public field names
+        // differently. Silently falling back to direct access would bypass its
+        // lock, and speaking to it anyway would silently drop fields it does
+        // not recognize, so refuse and say what to do about it.
+        let expected = env!("CARGO_PKG_VERSION");
+        if health.version.as_deref() != Some(expected) {
+            return Err(Error::DaemonVersionMismatch {
+                daemon: health
+                    .version
+                    .unwrap_or_else(|| "older than 0.3".to_owned()),
+                cli: expected.to_owned(),
+            });
+        }
         client.revision = health.revision;
         Ok(Some(client))
     }

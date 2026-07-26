@@ -73,7 +73,11 @@ struct ApiError {
     details: Option<JsonValue>,
 }
 
+/// Unknown parameters are rejected rather than ignored: a client still sending
+/// the removed `tag`/`type` filters would otherwise receive the whole library
+/// and mistake it for a filtered result.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListQuery {
     q: Option<String>,
     collection: Option<String>,
@@ -94,7 +98,11 @@ struct CreateItemRequest {
     fields: BTreeMap<String, String>,
 }
 
+/// Unknown fields are rejected for the same reason as `ListQuery`: a body
+/// still spelling the membership list `tags` must fail rather than report a
+/// successful change it did not make.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PatchItemRequest {
     #[serde(default)]
     set: BTreeMap<String, String>,
@@ -127,6 +135,9 @@ struct ListResponse {
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
+    /// The daemon's own version, so a client can refuse to speak to a build
+    /// whose field names it does not share.
+    version: &'static str,
     revision: String,
     entries: usize,
     warnings: usize,
@@ -375,6 +386,7 @@ async fn health(State(state): State<AppState>) -> ApiResult<Response> {
         StatusCode::OK,
         &HealthResponse {
             status: if degraded { "degraded" } else { "ok" },
+            version: env!("CARGO_PKG_VERSION"),
             revision: snapshot.revision.clone(),
             entries: report.entries,
             warnings: report.warnings,
@@ -1324,6 +1336,44 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|field| { field["name"] == "custom" && field["raw"] == "\"raw \" # {value}" })
+        );
+    }
+
+    /// A client that still speaks the old field names must be told so, not
+    /// handed the whole library or a success it did not get.
+    #[tokio::test]
+    async fn renamed_filters_and_fields_are_rejected_rather_than_ignored() {
+        let (_directory, state) = test_state();
+        let app = native_router(state);
+
+        for query in ["tag=keep", "type=article"] {
+            let response = app
+                .clone()
+                .oneshot(authorized(
+                    "GET",
+                    &format!("/api/v1/items?{query}"),
+                    Body::empty(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{query} should be refused"
+            );
+        }
+
+        // axum reports an unparseable body as 422 rather than 400; what matters
+        // is that it is refused instead of silently changing nothing.
+        let stale = json!({"tags": ["keep"]}).to_string();
+        let mut patch = authorized("PATCH", "/api/v1/items/missing", Body::from(stale));
+        patch
+            .headers_mut()
+            .insert(IF_MATCH, "\"anything\"".parse().unwrap());
+        assert_eq!(
+            app.oneshot(patch).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a body spelling collections `tags` should be refused"
         );
     }
 
