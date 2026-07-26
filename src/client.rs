@@ -150,16 +150,17 @@ impl ApiClient {
         Ok(health)
     }
 
-    pub fn list(&mut self, query: Option<&str>, collection: Option<&str>) -> Result<Vec<ItemView>> {
+    /// List items, filtering with the encoded query language.
+    ///
+    /// The `--collection` filter travels inside `q` as a `collection:` term, so
+    /// the daemon and the direct backend answer exactly the same question.
+    pub fn list(&mut self, query: Option<&str>) -> Result<Vec<ItemView>> {
         let mut request = self
             .agent
             .get(self.url("/api/v1/items"))
             .header(AUTHORIZATION, &self.authorization);
         if let Some(query) = query {
             request = request.query("q", query);
-        }
-        if let Some(collection) = collection {
-            request = request.query("collection", collection);
         }
         let response = self.call(request.call())?;
         let listed: ListResponse = self.decode(response)?;

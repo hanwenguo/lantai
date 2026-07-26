@@ -74,6 +74,12 @@ pub enum Error {
     #[error("item identifier is ambiguous: {id}")]
     AmbiguousItem { id: String },
 
+    #[error("invalid query term {term:?}: {message}")]
+    InvalidQueryTerm { term: String, message: String },
+
+    #[error("invalid sort key {key:?}; expected key, type, title, year, or a field name")]
+    InvalidSortKey { key: String },
+
     #[error("invalid field argument {argument:?}; expected NAME=VALUE")]
     InvalidFieldArgument { argument: String },
 

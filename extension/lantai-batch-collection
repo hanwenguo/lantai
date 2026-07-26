@@ -1,41 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# lantai-about: Preview or apply a batch membership change
+# lantai-about: Add or remove many items from a collection
 usage() {
   cat <<'EOF'
-Usage: lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]
+Usage: lantai batch-collection [--remove] [--all] COLLECTION [--] [TERM...]
 
-Preview items selected by a jq predicate and add them to COLLECTION. FILTER
-runs with each item as `.` and a lowercase `$fields` object. No changes occur
-unless --apply is present. Arguments after `--` are forwarded to `lantai list`.
+Change collection membership for several items at once. TERMs are the
+`lantai list` query language; put them after `--` if any of them starts with
+`-`. By default the matching items are offered in the picker and only the ones
+selected there are changed.
+
+  --remove   take the items out of COLLECTION instead of putting them in
+  --all      skip the picker and change every matching item
 EOF
 }
 
-apply=false
-if [[ ${1:-} == "--apply" ]]; then
-  apply=true
-  shift
-fi
-if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  usage
-  exit 0
-fi
-if (($# < 2)); then
+remove=false
+apply_to_all=false
+while (($# > 0)); do
+  case $1 in
+    --remove)
+      remove=true
+      shift
+      ;;
+    --all)
+      apply_to_all=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if (($# == 0)); then
   usage >&2
   exit 2
 fi
-
 collection=$1
-filter=$2
-shift 2
-if (($# > 0)); then
-  if [[ $1 != "--" ]]; then
-    echo "lantai batch-collection: list arguments must follow --" >&2
-    exit 2
-  fi
+shift
+if (($# > 0)) && [[ $1 == "--" ]]; then
   shift
 fi
+terms=("$@")
 
 command -v jq >/dev/null 2>&1 || {
   echo "lantai batch-collection: jq is required" >&2
@@ -43,6 +55,8 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 export LANTAI="${LANTAI:-lantai}"
+# `lantai` only exports LANTAI_CONFIG when --config was passed, and bash 3.2
+# treats an empty array as unset under `set -u`, hence the guarded expansions.
 lantai_args=()
 if [[ -n ${LANTAI_CONFIG:-} ]]; then
   lantai_args+=(--config "$LANTAI_CONFIG")
@@ -51,46 +65,44 @@ fi
 selection_file=$(mktemp "${TMPDIR:-/tmp}/lantai-batch-collection.XXXXXX")
 trap 'rm -f "$selection_file"' EXIT
 
-jq_program='map(
-  . as $item
-  | (reduce $item.fields[]? as $field
-      ({}; .[$field.name | ascii_downcase] = $field.value)) as $fields
-  | select('"$filter"')
-)'
-
-"$LANTAI" "${lantai_args[@]}" list "$@" | jq "$jq_program" >"$selection_file"
-
-render_preview() {
-  jq -r '
-    ["UUID", "KEY", "TITLE"],
-    (.[] | [(.uuid // ""), .citation_key, (.title // "")])
-    | @tsv
-  ' "$selection_file"
-}
-if command -v column >/dev/null 2>&1; then
-  render_preview | column -t -s $'\t'
+# The picker returns whole items rather than identifiers so that the UUID check
+# below can tell an entry with no UUID from one falling back to its key.
+if $apply_to_all; then
+  "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} list -- \
+    ${terms[@]+"${terms[@]}"} >"$selection_file"
 else
-  render_preview
+  "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} pick -- \
+    ${terms[@]+"${terms[@]}"} >"$selection_file"
 fi
 
-if ! $apply; then
-  echo "Preview only; rerun with --apply to add them to '$collection'." >&2
+if [[ ! -s $selection_file ]]; then
+  echo "Nothing selected." >&2
   exit 0
 fi
-
-if jq -e 'any(.[]; .uuid == null)' "$selection_file" >/dev/null; then
-  echo "lantai batch-collection: refusing to apply because a selected item has no UUID; run lantai format first" >&2
-  exit 2
-fi
-
 count=$(jq 'length' "$selection_file")
 if ((count == 0)); then
   echo "No matching items." >&2
   exit 0
 fi
 
+if jq -e 'any(.[]; .uuid == null)' "$selection_file" >/dev/null; then
+  echo "lantai batch-collection: refusing to change an item with no UUID; run lantai format first" >&2
+  exit 2
+fi
+
+if $remove; then
+  action=remove
+  preposition=from
+  past=Removed
+else
+  action=add
+  preposition=to
+  past=Added
+fi
+
 while IFS= read -r -d '' uuid; do
-  "$LANTAI" "${lantai_args[@]}" collection add "$uuid" "$collection" --json >/dev/null
+  "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} collection "$action" \
+    "$uuid" "$collection" --json >/dev/null
 done < <(jq -j '.[] | .uuid, "\u0000"' "$selection_file")
 
-printf "Added %d item(s) to '%s'.\n" "$count" "$collection"
+printf "%s %d item(s) %s '%s'.\n" "$past" "$count" "$preposition" "$collection"

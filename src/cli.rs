@@ -10,9 +10,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use directories::BaseDirs;
 use serde::Serialize;
 
-use crate::catalog::{
-    Catalog, CatalogItem, CheckIssue, CheckReport, CheckStatus, IssueSeverity, ItemView,
-};
+use crate::catalog::{Catalog, CheckIssue, CheckReport, CheckStatus, IssueSeverity, ItemView};
 use crate::client::ApiClient;
 use crate::collections;
 use crate::config::{
@@ -24,9 +22,33 @@ use crate::library::{
     AddedItem, AttachedFile, DetachedFile, FormatResult, ItemPatch, LibraryLayout, LibraryStore,
     MutationResult, NewItem, RemovedItem, TrashEntry,
 };
+use crate::query::{Query, Sort};
 use crate::zotero::map_item;
 use crate::zotero_rdf::{RdfImport, SkippedAttachment};
 use crate::{Error, Result};
+
+/// The query language, shown under `lantai list --help` because a grammar is
+/// unguessable from a one-line argument description.
+const LIST_QUERY_HELP: &str = "\
+Query terms:
+  WORD                  citation key or any field contains WORD
+  key:WORD              citation key contains WORD
+  type:TYPE             entry type is exactly TYPE
+  collection:NAME       filed in NAME or anything nested under it
+  year:YEAR             published in YEAR; ranges are YEAR.., ..YEAR, YEAR..YEAR
+  NAME:WORD             field NAME contains WORD
+  NAME:                 field NAME is present at all
+  any:WORD              like WORD, for values that contain a colon
+  -TERM                 negate any term (put it after `--`)
+
+Terms are combined with and. Sort keys are key, type, title, year, or a field
+name: `--sort=-year,key`.
+
+Examples:
+  lantai list author:knuth year:1970..1979
+  lantai list type:book collection:Projects --sort=-year
+  lantai list -- -collection:            # never filed anywhere\
+";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -67,13 +89,20 @@ enum Command {
     Serve,
 
     /// List bibliography entries.
+    #[command(after_help = LIST_QUERY_HELP)]
     List {
-        /// Match citation key, title, or field text.
-        query: Option<String>,
+        /// Query terms, all of which must match. A bare word searches the
+        /// citation key and every field; NAME:VALUE narrows the search.
+        #[arg(value_name = "TERM")]
+        query: Vec<String>,
 
         /// Include only entries in this collection.
         #[arg(long)]
         collection: Option<String>,
+
+        /// Order by KEY[,KEY...]; prefix a key with `-` for descending.
+        #[arg(long, value_name = "KEYS", allow_hyphen_values = true)]
+        sort: Option<String>,
 
         /// Select JSON or the legacy tab-separated display (defaults to JSON).
         #[arg(long, value_enum)]
@@ -392,25 +421,29 @@ impl Backend {
         }
     }
 
-    fn list(&mut self, query: Option<&str>, collection: Option<&str>) -> Result<Vec<ItemView>> {
-        match &mut self.mode {
-            BackendMode::Daemon(client) => client.list(query, collection),
+    fn list(&mut self, query: &Query, sort: Option<&Sort>) -> Result<Vec<ItemView>> {
+        let mut items = match &mut self.mode {
+            BackendMode::Daemon(client) => client.list(query.to_q().as_deref())?,
             BackendMode::Direct(_) => {
                 let contents = self.layout.read_utf8()?;
                 let catalog = Catalog::parse(&self.layout.bibliography, &contents)?;
-                Ok(catalog
+                catalog
                     .items()
-                    .filter(|item| matches_item(item, query, collection))
+                    .filter(|item| query.matches(item))
                     .map(ItemView::from)
-                    .collect())
+                    .collect()
             }
+        };
+        if let Some(sort) = sort {
+            sort.apply(&mut items);
         }
+        Ok(items)
     }
 
     /// Every collection in the library, deduped and ordered.
     fn collections(&mut self) -> Result<BTreeSet<String>> {
         Ok(collections::of_items(
-            self.list(None, None)?
+            self.list(&Query::default(), None)?
                 .into_iter()
                 .map(|item| item.collections),
         ))
@@ -852,10 +885,15 @@ fn run_cli(cli: Cli) -> Result<()> {
         Command::List {
             query,
             collection,
+            sort,
             format,
         } => {
+            // Parse before touching the library so a mistyped term fails
+            // immediately rather than after reading and parsing everything.
+            let query = Query::parse_terms(query)?.with_collection(collection.as_deref());
+            let sort = sort.as_deref().map(Sort::parse).transpose()?;
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            let summaries = backend.list(query.as_deref(), collection.as_deref())?;
+            let summaries = backend.list(&query, sort.as_ref())?;
             if output_is_json(format) {
                 print_json(&summaries)
             } else {
@@ -1536,25 +1574,6 @@ fn configured_layout(library: PathBuf, config: Option<&Config>) -> Result<Librar
     }
 }
 
-fn matches_item(item: &CatalogItem, query: Option<&str>, collection: Option<&str>) -> bool {
-    if collection.is_some_and(|collection| {
-        !item
-            .collections
-            .iter()
-            .any(|candidate| collections::matches(candidate, collection))
-    }) {
-        return false;
-    }
-    query.is_none_or(|query| {
-        let query = query.to_lowercase();
-        item.citation_key.to_lowercase().contains(&query)
-            || item
-                .fields
-                .iter()
-                .any(|field| field.value.to_lowercase().contains(&query))
-    })
-}
-
 fn parse_field_argument(argument: String) -> Result<(String, String)> {
     let Some((name, value)) = argument.split_once('=') else {
         return Err(Error::InvalidFieldArgument { argument });
@@ -1795,6 +1814,7 @@ fn print_check(layout: &LibraryLayout, report: &CheckReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::CatalogItem;
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1945,7 +1965,10 @@ mod tests {
                     )
                     .unwrap();
                 let item = backend.get(&added.uuid.to_string()).unwrap();
-                let listed = backend.list(Some("After"), Some("REMOTE")).unwrap();
+                let query = Query::parse_terms(["After"])
+                    .unwrap()
+                    .with_collection(Some("REMOTE"));
+                let listed = backend.list(&query, None).unwrap();
                 (added.uuid, attached.attachment_uuid, item, listed)
             })
             .await
@@ -1980,10 +2003,10 @@ mod tests {
             direct.get(&item_uuid.to_string()).unwrap().collections,
             vec!["remote"]
         );
-        assert_eq!(
-            direct.list(Some("After"), Some("remote")).unwrap(),
-            daemon_list
-        );
+        let query = Query::parse_terms(["After"])
+            .unwrap()
+            .with_collection(Some("remote"));
+        assert_eq!(direct.list(&query, None).unwrap(), daemon_list);
         direct
             .patch(
                 &item_uuid.to_string(),
@@ -2150,14 +2173,19 @@ mod tests {
         };
         // The tree synthesizes "Projects" and trims the spelling to
         // "Projects/IfT"; both are offered to the user, so both must filter.
+        let filter = |collection: &str| {
+            Query::default()
+                .with_collection(Some(collection))
+                .matches(&item)
+        };
         for target in collections::tree(collections::of_items([item.collections.clone()])) {
             assert!(
-                matches_item(&item, None, Some(&target.path)),
+                filter(&target.path),
                 "{} was listed but matches nothing",
                 target.path
             );
         }
-        assert!(!matches_item(&item, None, Some("Projects/Other")));
+        assert!(!filter("Projects/Other"));
     }
 
     /// The grouped help is hand-written, so nothing may quietly fall out of it.

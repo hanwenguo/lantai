@@ -167,7 +167,7 @@ def ascii_alnum(text):
 
 
 def fields_object(item):
-    # Later duplicate names intentionally win, matching the query extension.
+    # A duplicated field name is a defect; take the last and move on.
     return {field["name"].lower(): field["value"]
             for field in item.get("fields", [])}
 

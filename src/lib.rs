@@ -9,6 +9,7 @@ pub mod error;
 pub mod hook;
 pub mod keys;
 pub mod library;
+pub mod query;
 pub mod server;
 pub mod zotero;
 pub mod zotero_rdf;

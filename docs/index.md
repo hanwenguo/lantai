@@ -18,7 +18,7 @@ endpoint.
 
 ## Automation
 
-- [Compose the CLI with jq, fzf, and the official extensions](cli-workflows.md).
+- [Search, pick items interactively, and compose the CLI](cli-workflows.md).
 - [Install or write Git-style extensions](../extension/README.md).
 - [Run a custom post-save hook](post-save-hooks.md), including custom
   citation-key generation.

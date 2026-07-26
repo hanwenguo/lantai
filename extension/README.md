@@ -31,29 +31,30 @@ install -m 755 extension/lantai-* "$HOME/.local/bin/"
 ```
 
 The scripts can also be called directly, such as
-`extension/lantai-table --collection Reviewed`.
+`extension/lantai-pick collection:Reviewed`.
 
 ## Official commands
 
 | Command | Purpose | Dependencies |
 | --- | --- | --- |
-| `lantai table [LIST_ARGS...]` | Render a key/type/title table | `jq`; optional `column` |
-| `lantai query FILTER [-- LIST_ARGS...]` | Select items with a jq predicate | `jq` |
-| `lantai pick [--id-only] [-- LIST_ARGS...]` | Fuzzy-select an item | `jq`, `fzf` |
-| `lantai open [--print] [-- LIST_ARGS...]` | Fuzzy-select and open an attachment | `jq`, `fzf`, `open` or `xdg-open` |
-| `lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]` | Preview or apply a batch membership change | `jq`; optional `column` |
-| `lantai api-list [QUERY] [--collection COLLECTION]` | Query the native REST API | `curl`, `jq` |
+| `lantai pick [--id-only] [--attachments] [--] [TERM...]` | Interactively pick items or attachments | `jq`, `fzf` 0.56 or newer |
+| `lantai open [--print] [--] [TERM...]` | Pick an attachment and open it | `lantai pick`, `jq`, `open` or `xdg-open` |
+| `lantai batch-collection [--remove] [--all] COLLECTION [--] [TERM...]` | Add or remove many items from a collection | `jq`; `lantai pick` unless `--all` |
 
-Run any command with `--help` for its complete interface. Arguments after
-`--` in `query`, `pick`, `open`, and `batch-collection` are passed to
-the built-in `list` command.
+Run any command with `--help` for its complete interface. `TERM...` is the
+[query language](../docs/cli-reference.md#list) the built-in `list` takes, so
+filters are written `collection:Reviewed` rather than `--collection Reviewed`.
+A `--` is only needed when a term starts with `-`, such as a negation.
+
+`open` reaches the picker through `lantai pick`, so a `lantai-pick` earlier on
+`PATH` replaces the one it uses.
 
 ## Extension process contract
 
 Global Lantai options must precede the custom command:
 
 ```sh
-lantai --library /path/to/references.bib query '.entry_type == "article"'
+lantai --library /path/to/references.bib pick type:article
 ```
 
 The extension inherits the caller's working directory and standard streams.
@@ -88,13 +89,23 @@ if [[ -n ${LANTAI_CONFIG:-} ]]; then
   args+=(--config "$LANTAI_CONFIG")
 fi
 
-"$lantai_bin" "${args[@]}" list "$@" |
+"$lantai_bin" ${args[@]+"${args[@]}"} list -- "$@" |
   jq 'map({uuid, citation_key, title})'
 ```
 
 Keep data on standard output, diagnostics on standard error, quote every shell
 expansion, and avoid `eval`. Prefer UUIDs whenever the extension invokes a
 mutation.
+
+If an extension drives `fzf` over tab-separated columns, note that `--nth`
+counts fields of the string `--with-nth` produces, not of the input line. A
+column left out of `--with-nth` cannot be searched, and an index past the end
+of the transformed string silently matches nothing.
+
+macOS ships Bash 3.2, where expanding an *empty* array under `set -u` is a fatal
+"unbound variable" error — and the array above is empty on every run that did
+not pass a configuration override, which is nearly all of them. Write
+`${args[@]+"${args[@]}"}`, not `"${args[@]}"`; the official extensions all do.
 
 ### Describe the command
 

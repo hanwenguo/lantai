@@ -127,13 +127,21 @@ Optional query parameters:
 
 | Parameter | Meaning |
 | --- | --- |
-| `q` | Case-insensitive substring in citation key or expanded field values |
+| `q` | Query terms, in the language `lantai list` takes |
 | `collection` | The collection and everything nested under it, case-insensitively |
+| `sort` | Comma-separated sort keys, each optionally prefixed with `-` |
+
+`q` holds whitespace-separated terms, all of which must match: `q=type:article
+author:vaswani`. A term containing whitespace is double-quoted, and inside
+quotes `\"` and `\\` are literal — so the old whole-string substring search is
+now spelled `q="two words"`. The grammar, and the sort keys, are documented
+under [`lantai list`](cli-reference.md#list). A malformed term or sort key is
+rejected with `400`.
 
 Unknown parameters are rejected with `400`, so a client still sending the
 removed `tag` or `type` filters fails loudly instead of receiving the whole
-library. Both supplied filters are ANDed. The response preserves bibliography
-order:
+library. `q` and `collection` are ANDed. Without `sort` the response preserves
+bibliography order:
 
 ```json
 {"items": [], "revision": "..."}
@@ -282,7 +290,16 @@ ETag normally remains unchanged.
 
 ## REST composition
 
-The shipped `lantai api-list` extension wraps authenticated list requests and
-URL encoding. See [CLI workflows](cli-workflows.md#query-the-rest-api). For a
-custom mutation client, always retain and update the ETag after each response,
-use UUIDs, and treat each request as a separate atomic operation.
+`curl` needs `--data-urlencode` for anything with a space or a `+` in it:
+
+```sh
+curl --get --fail --silent \
+  --header "Authorization: Bearer $LANTAI_TOKEN" \
+  --data-urlencode 'q=type:article collection:Reviewed' \
+  --data-urlencode 'sort=-year' \
+  http://127.0.0.1:23120/api/v1/items |
+  jq '.items[] | {uuid, citation_key, title}'
+```
+
+For a custom mutation client, always retain and update the ETag after each
+response, use UUIDs, and treat each request as a separate atomic operation.

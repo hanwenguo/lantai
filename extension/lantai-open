@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# lantai-about: Fuzzy-select and open an attachment
+# lantai-about: Pick an attachment and open it
 usage() {
   cat <<'EOF'
-Usage: lantai open [--print] [-- LIST_ARGS...]
+Usage: lantai open [--print] [--] [TERM...]
 
-Fuzzy-select an attachment and open it with macOS `open` or Linux
-`xdg-open`. Use --print to write the resolved path without opening it.
-Arguments after `--` are forwarded to `lantai list`.
+Pick attachments with `lantai pick --attachments` and open them with macOS
+`open` or Linux `xdg-open`. TERMs are the `lantai list` query language; put
+them after `--` if any of them starts with `-`.
+
+  --print   write the resolved paths instead of opening them
+
+Selecting several attachments opens all of them. Selecting none does nothing
+and succeeds.
 EOF
 }
 
 print_only=false
-list_args=()
+terms=()
 while (($# > 0)); do
   case $1 in
     --print)
@@ -26,85 +31,85 @@ while (($# > 0)); do
       ;;
     --)
       shift
-      list_args=("$@")
+      terms=("$@")
       break
       ;;
     *)
-      echo "lantai open: unexpected argument: $1" >&2
-      usage >&2
-      exit 2
+      terms=("$@")
+      break
       ;;
   esac
 done
 
-for dependency in jq fzf; do
-  command -v "$dependency" >/dev/null 2>&1 || {
-    echo "lantai open: $dependency is required" >&2
-    exit 127
-  }
-done
+command -v jq >/dev/null 2>&1 || {
+  echo "lantai open: jq is required" >&2
+  exit 127
+}
 
 export LANTAI="${LANTAI:-lantai}"
+# The picker is reached through `lantai` itself, so a locally overridden
+# `lantai-pick` on PATH is the one that runs. LANTAI_LIBRARY is inherited, but
+# LANTAI_CONFIG has to be re-stated as a flag: `lantai` only exports it when it
+# was given one.
 lantai_args=()
 if [[ -n ${LANTAI_CONFIG:-} ]]; then
   lantai_args+=(--config "$LANTAI_CONFIG")
 fi
 
-status=0
 selection=$(
-  "$LANTAI" "${lantai_args[@]}" list "${list_args[@]}" |
-    jq -r '
-      .[] as $item
-      | $item.attachments[]?
-      | [
-          ($item.uuid // $item.citation_key),
-          ($item.citation_key | gsub("[\\t\\r\\n]"; " ")),
-          ((.title // "") | gsub("[\\t\\r\\n]"; " ")),
-          (.media_type | gsub("[\\t\\r\\n]"; " ")),
-          (.path | gsub("[\\t\\r\\n]"; " ")),
-          (.path | @base64)
-        ]
-      | @tsv
-    ' |
-    fzf --delimiter=$'\t' --with-nth=2,3,4,5 --prompt='Attachment> '
-) || status=$?
-
-case $status in
-  0) ;;
-  1|130) exit 0 ;;
-  *) exit "$status" ;;
-esac
+  "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} pick --attachments -- \
+    ${terms[@]+"${terms[@]}"}
+)
 [[ -n $selection ]] || exit 0
+if [[ $(printf '%s' "$selection" | jq 'length') -eq 0 ]]; then
+  exit 0
+fi
 
-encoded_path=$(printf '%s\n' "$selection" | cut -f6)
-attachment_path=$(jq -rn --arg path "$encoded_path" '$path | @base64d')
-if [[ $attachment_path == /* ]]; then
-  resolved_path=$attachment_path
-else
-  # `check` reports the library path alongside its findings, and opening a file
-  # does not depend on the library being intact — so ignore the exit status but
-  # not the diagnostics, which are the only clue when it fails outright.
-  report=$("$LANTAI" "${lantai_args[@]}" check --json) || true
+# Managed attachments are recorded relative to the library, so those need the
+# library directory. `check` reports that path alongside its findings, and
+# opening a file does not depend on the library being intact — so ignore the
+# exit status but not the diagnostics, which are the only clue when it fails
+# outright.
+library_directory=
+if printf '%s' "$selection" | jq -e 'any(.[]; .attachment.path | startswith("/") | not)' >/dev/null; then
+  report=$("$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} check --json) || true
   if [[ -z $report ]]; then
     echo "lantai open: could not determine the library path" >&2
     exit 1
   fi
   library=$(printf '%s' "$report" | jq -er '.library')
-  resolved_path=$(dirname -- "$library")/$attachment_path
+  library_directory=$(dirname -- "$library")
 fi
 
-if $print_only; then
-  printf '%s\n' "$resolved_path"
-elif [[ $(uname -s) == Darwin ]]; then
-  command -v open >/dev/null 2>&1 || {
-    echo "lantai open: open is required on macOS" >&2
-    exit 127
-  }
-  open -- "$resolved_path"
-else
-  command -v xdg-open >/dev/null 2>&1 || {
-    echo "lantai open: xdg-open is required on this platform" >&2
-    exit 127
-  }
-  xdg-open "$resolved_path"
-fi
+resolve() {
+  if [[ $1 == /* ]]; then
+    printf '%s\n' "$1"
+  else
+    printf '%s\n' "$library_directory/$1"
+  fi
+}
+
+open_file() {
+  if [[ $(uname -s) == Darwin ]]; then
+    command -v open >/dev/null 2>&1 || {
+      echo "lantai open: open is required on macOS" >&2
+      exit 127
+    }
+    open -- "$1"
+  else
+    command -v xdg-open >/dev/null 2>&1 || {
+      echo "lantai open: xdg-open is required on this platform" >&2
+      exit 127
+    }
+    xdg-open "$1"
+  fi
+}
+
+while IFS= read -r -d '' attachment_path; do
+  resolved_path=$(resolve "$attachment_path")
+  if $print_only; then
+    printf '%s\n' "$resolved_path"
+  else
+    open_file "$resolved_path"
+  fi
+done < <(printf '%s' "$selection" | jq -j '.[] | .attachment.path, "\u0000"')

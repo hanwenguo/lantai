@@ -1,11 +1,11 @@
-# Compose Lantai with official extensions
+# Search, pick, and compose
 
 [Back to the user manual](index.md).
 
-`lantai list` and `lantai show` write JSON by default. Lantai also ships
-Git-style extension commands for common `jq`, `fzf`, and shell
-workflows. Add the repository's `extension/` directory to `PATH` or
-install the scripts as described in the
+`lantai list` and `lantai show` write JSON by default, and `list` takes a small
+query language that the shipped extension commands reuse. The extensions are
+Git-style scripts around `jq` and `fzf`; add the repository's `extension/`
+directory to `PATH` or install the scripts as described in the
 [extension guide](../extension/README.md):
 
 ```sh
@@ -34,132 +34,131 @@ returns one object with the same shape. See the canonical [public item JSON
 schema](library-model.md#public-item-json) for fields, raw expressions,
 collections, attachments, ordering, and nullable identities.
 
-## Render a table
+## Search with query terms
 
-`table` turns complete list records into a compact key/type/title view:
+Every argument to `lantai list` is one term, and an item has to match all of
+them. A bare word is the substring search over citation keys and expanded field
+values that `list` has always had; `name:value` narrows it. The grammar is in
+the [CLI reference](cli-reference.md#list), and `lantai list --help` prints a
+summary.
 
 ```sh
-lantai table
-lantai table attention --collection "Machine Learning"
+lantai list attention transformer            # both words, anywhere
+lantai list author:vaswani year:2017         # one field each
+lantai list type:article collection:Reviewed # exact type, nested collection
+lantai list year:2019..2024 --sort=-year     # a range, newest first
+lantai list doi:                             # has a DOI at all
+lantai list -- -collection:                  # filed nowhere
 ```
 
-All arguments are forwarded to the built-in `list`. Lantai's query is a
-case-insensitive substring match over citation keys and expanded fields;
-`--collection` matches that collection and everything nested under it, case-
-insensitively. Both filters are combined with AND.
+Terms starting with `-` are negations, and they have to follow `--` so that a
+mistyped flag is still reported as one. `--sort` takes comma-separated keys —
+`key`, `type`, `title`, `year`, or any field name — each optionally prefixed
+with `-` for descending; items missing that value sort last either way.
 
-## Query with rich conditions
-
-`query` accepts a jq predicate evaluated once per item. The complete item
-is `.` and `$fields` is a temporary object made from the ordered field
-array using lowercase names and expanded values:
+Values containing a colon after a name-shaped prefix would read as a scope, so
+`any:` says you meant the whole thing literally:
 
 ```sh
-lantai query '
-  (($fields.author // "") | test("lovelace"; "i"))
-  and (($fields.date // "") | startswith("1843"))
-  and (($fields.doi // "") != "")
-  and any(.collections[]?; ascii_downcase == "history")
-' -- --collection Reviewed
+lantai list any:https://example.org/paper
 ```
 
-The result remains an array of complete item objects. Use built-in filters after
-`--` as an inexpensive first pass, then use the predicate for entry types,
-regular expressions, ranges, optional fields, and compound Boolean logic —
-`.entry_type == "article"` is how a type filter is spelled now. If duplicate
-field names occur, the last source occurrence wins in `$fields`; the
-original `fields` array is never changed.
+The same language reaches the daemon and the REST API, where the terms travel
+as one `q` string and whitespace inside a term is quoted: `q=type:article
+"exact phrase"`.
 
-## Fuzzy-select an item
+## Pick items interactively
 
-`pick` shows key and title in `fzf` with a colored full-record preview.
-It emits the selected JSON object:
+`pick` runs the matching items through `fzf` and writes the selected items as a
+JSON array in bibliography order:
 
 ```sh
-lantai pick -- --collection "Machine Learning" | jq
+lantai pick collection:"Machine Learning" | jq '.[].title'
 ```
 
-For a query-then-mutate interface, request only the stable identifier:
+Each row shows the year, the authors, and the title; the columns follow the
+terminal size. Given names appear in full where they fit, abbreviated where
+they do not, and only then does the list shorten to `et al.`. The record itself
+is shown underneath as a labelled list rather than as JSON, with the abstract
+last and the import bookkeeping left out.
+
+Typing matches whole words against the complete citation key, author list,
+title, and collections — including the parts a row abbreviates, so an author's
+given name or a phrase late in a long title still finds it. Prefix a word with
+`'` for a loose fuzzy match instead. Matching is literal by default because a
+fuzzy subsequence over that much text matches almost everything and ranks it by
+accident.
+
+Inside the picker, `TAB` adds a selection, `alt-a`/`alt-k`/`alt-u`/`alt-t`
+switch what matching looks at (everything, citation key, author, title), and
+`alt-y`/`alt-e`/`alt-l`/`alt-r` reorder by year, key, title, or bibliography
+order. `alt-c` opens a second picker listing every collection the loaded items
+sit in — choosing one narrows the list to it and anything nested under it, and
+`(all collections)` clears it again. An item can belong to several collections,
+so membership is shown in the record rather than as a column. The header shows
+the current state, and narrowing and re-sorting are both local, so neither
+re-reads the library.
+
+For a query-then-mutate interface, ask for identifiers instead:
 
 ```sh
-item_id=$(lantai pick --id-only -- attention)
-if [ -n "$item_id" ]; then
+lantai pick --id-only attention | while IFS= read -r item_id; do
   lantai collection add "$item_id" Reviewed
-fi
+done
 ```
 
-Cancellation succeeds without output. UUIDs are preferred; an item without one
-falls back to its citation key. Run `lantai format` first when every
+Cancelling succeeds without output, and so does a query that matches nothing —
+the picker never opens on an empty list. UUIDs are preferred; an item without
+one falls back to its citation key. Run `lantai format` first when every
 externally added entry must have a stable mutation identifier.
 
-## Select and open an attachment
+## Open an attachment
 
-`open` fuzzy-selects an attachment, resolves managed relative paths
-against the bibliography directory, and uses the platform opener:
-
-```sh
-lantai open -- --collection Reviewed
-```
-
-To compose with a different application without launching anything:
+`open` picks attachments rather than items, resolves managed relative paths
+against the bibliography directory, and hands them to the platform opener:
 
 ```sh
-attachment_path=$(lantai open --print -- --collection needs-review)
-if [ -n "$attachment_path" ]; then
-  printf '%s\n' "$attachment_path"
-fi
+lantai open collection:Reviewed
 ```
 
-Cancellation succeeds without output. Paths are always passed as a single
-quoted argument; managed filenames are also sanitized by Lantai.
-
-## Preview and apply a batch membership change
-
-`batch-collection` snapshots the matching records and prints their UUID, key,
-and title. Without `--apply` it never mutates the library:
+Selecting several attachments opens all of them. To compose with a different
+application without launching anything:
 
 ```sh
-lantai batch-collection Reviewed '
-  .entry_type == "article"
-  and any(.collections[]?; ascii_downcase == "needs-review")
-'
+lantai open --print collection:needs-review | while IFS= read -r path; do
+  printf '%s\n' "$path"
+done
 ```
 
-After reviewing the same command, add `--apply`:
+Paths are always passed as a single quoted argument; managed filenames are also
+sanitized by Lantai.
+
+## Change collection membership in bulk
+
+`batch-collection` narrows the library with query terms, offers the matches in
+the picker, and applies the change to what you select:
 
 ```sh
-lantai batch-collection --apply Reviewed '
-  .entry_type == "article"
-  and any(.collections[]?; ascii_downcase == "needs-review")
-'
+lantai batch-collection Reviewed type:article collection:needs-review
 ```
 
-Application is refused before any mutation if a selected record lacks a UUID.
-Otherwise items are added sequentially by UUID and processing stops at the
-first failure. These are separate locked Lantai mutations, not one atomic batch.
-
-## Query the REST API
-
-`api-list` requires the bearer token in the environment, URL-encodes
-filters with `curl`, and returns the REST `items`/`revision`
-envelope:
+`--remove` takes items out of the collection instead. `--all` skips the picker
+and changes every match, which is the form to use from a script:
 
 ```sh
-export LANTAI_TOKEN='read-from-a-secure-credential-source'
-
-lantai api-list attention --collection Reviewed |
-  jq '.items[] | {uuid, citation_key, title, attachments}'
+lantai batch-collection --remove --all needs-review collection:Reviewed
 ```
 
-Set `LANTAI_API_URL` to override the default
-`http://127.0.0.1:23120` endpoint. The token is never accepted as a
-command-line option. The response revision also appears as a quoted `ETag`
-header; mutation clients should send it in `If-Match`.
+The change is refused before any mutation if a selected record lacks a UUID.
+Otherwise items are changed sequentially by UUID and processing stops at the
+first failure. These are separate locked Lantai mutations, not one atomic
+batch.
 
 ## Adapt the workflows
 
-The official commands are ordinary, executable Bash scripts in
-`extension/`. Copy one under a new `lantai-NAME` filename to build a
-custom operation interface. Keep machine data on stdout and diagnostics on
-stderr, prefer UUIDs for mutations, use NUL delimiters for arbitrary batches,
-quote every expansion, and do not use `eval`.
+The official commands are ordinary, executable Bash scripts in `extension/`.
+Copy one under a new `lantai-NAME` filename to build a custom operation
+interface. Keep machine data on stdout and diagnostics on stderr, prefer UUIDs
+for mutations, use NUL delimiters for arbitrary batches, quote every expansion,
+and do not use `eval`. On macOS the scripts run under Bash 3.2, where an empty
+array is an error under `set -u`: expand as `${array[@]+"${array[@]}"}`.

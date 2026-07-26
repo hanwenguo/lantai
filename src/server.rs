@@ -81,6 +81,7 @@ struct ApiError {
 struct ListQuery {
     q: Option<String>,
     collection: Option<String>,
+    sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,14 +402,24 @@ async fn list_items(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Response> {
+    let filter = crate::query::Query::parse_str(query.q.as_deref().unwrap_or_default())?
+        .with_collection(query.collection.as_deref());
+    let sort = query
+        .sort
+        .as_deref()
+        .map(crate::query::Sort::parse)
+        .transpose()?;
     let snapshot = state.snapshot().await;
-    let items = snapshot
+    let mut items = snapshot
         .items
         .iter()
-        .filter(|item| matches_query(item, &query))
+        .filter(|item| filter.matches(item))
         .cloned()
         .map(ItemView::from)
-        .collect();
+        .collect::<Vec<_>>();
+    if let Some(sort) = sort {
+        sort.apply(&mut items);
+    }
     Ok(json_response(
         StatusCode::OK,
         &ListResponse {
@@ -925,25 +936,6 @@ fn find_indexed_item(items: &[CatalogItem], id: &str) -> LantaiResult<CatalogIte
     }
 }
 
-fn matches_query(item: &CatalogItem, query: &ListQuery) -> bool {
-    if query.collection.as_ref().is_some_and(|collection| {
-        !item
-            .collections
-            .iter()
-            .any(|candidate| crate::collections::matches(candidate, collection))
-    }) {
-        return false;
-    }
-    query.q.as_ref().is_none_or(|query| {
-        let query = query.to_lowercase();
-        item.citation_key.to_lowercase().contains(&query)
-            || item
-                .fields
-                .iter()
-                .any(|field| field.value.to_lowercase().contains(&query))
-    })
-}
-
 fn json_response<T: Serialize>(status: StatusCode, value: &T, revision: &str) -> Response {
     let mut response = (status, Json(value)).into_response();
     insert_etag(response.headers_mut(), revision);
@@ -1041,7 +1033,9 @@ impl From<Error> for ApiError {
             | Error::InvalidFileField { .. }
             | Error::UnsafeAttachmentPath { .. }
             | Error::AttachmentTooLarge { .. }
-            | Error::AttachmentNotFile { .. } => (StatusCode::BAD_REQUEST, "invalid_request"),
+            | Error::AttachmentNotFile { .. }
+            | Error::InvalidQueryTerm { .. }
+            | Error::InvalidSortKey { .. } => (StatusCode::BAD_REQUEST, "invalid_request"),
             Error::ImportHasNoEntries => (StatusCode::BAD_REQUEST, "invalid_request"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         };
@@ -1337,6 +1331,78 @@ mod tests {
                 .iter()
                 .any(|field| { field["name"] == "custom" && field["raw"] == "\"raw \" # {value}" })
         );
+    }
+
+    /// `q` speaks the same language the CLI does, so a saved search works from
+    /// either side.
+    #[tokio::test]
+    async fn api_list_speaks_the_query_language_and_sorts() {
+        let (_directory, state) = test_state();
+        state
+            .store()
+            .import_biblatex(concat!(
+                "@article{early,title={Early Paper},author={Ada Lovelace},year={1843}}\n",
+                "@book{late,title={Late Book},author={Ada Lovelace},year={2019}}\n",
+                "@article{other,title={Two Words},author={Grace Hopper}}\n"
+            ))
+            .unwrap();
+        state.refresh().await;
+        let app = native_router(state);
+
+        let keys = |query: &str| {
+            let app = app.clone();
+            let query = query.to_owned();
+            async move {
+                let response = app
+                    .oneshot(authorized(
+                        "GET",
+                        &format!("/api/v1/items?{query}"),
+                        Body::empty(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{query}");
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let body: JsonValue = serde_json::from_slice(&body).unwrap();
+                body["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["citation_key"].as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        assert_eq!(keys("q=type%3Aarticle+author%3Alovelace").await, ["early"]);
+        assert_eq!(keys("q=year%3A1900..").await, ["late"]);
+        assert_eq!(keys("q=-year%3A").await, ["other"]);
+        assert_eq!(
+            keys("sort=-year").await,
+            ["late", "early", "other"],
+            "items with no year sort last"
+        );
+        assert_eq!(
+            keys("q=%22Two+Words%22").await,
+            ["other"],
+            "quoting makes whitespace literal"
+        );
+        assert!(
+            keys("q=Two+Paper").await.is_empty(),
+            "unquoted whitespace separates terms, and both must match"
+        );
+
+        for query in ["q=year%3Asoon", "sort=-"] {
+            let response = app
+                .clone()
+                .oneshot(authorized(
+                    "GET",
+                    &format!("/api/v1/items?{query}"),
+                    Body::empty(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+        }
     }
 
     /// A client that still speaks the old field names must be told so, not

@@ -27,7 +27,17 @@ impl Fixture {
                     "  author = \"Ada \" # {{Lovelace}},\n",
                     "  keywords = {{history, Computing}},\n",
                     "  file = {{:/tmp/paper.pdf:application/pdf}},\n",
+                    "  year = {{1843}},\n",
                     "  lantaiid = {{{}}}\n",
+                    "}}\n",
+                    "@book{{late,\n",
+                    "  title = {{A Late Book}},\n",
+                    "  author = {{Grace Hopper}},\n",
+                    "  date = {{2019-07}}\n",
+                    "}}\n",
+                    "@misc{{undated,\n",
+                    "  title = {{No Date At All}},\n",
+                    "  author = {{Grace Hopper}}\n",
                     "}}\n"
                 ),
                 ITEM_UUID
@@ -73,7 +83,7 @@ fn stdout(output: &Output) -> &str {
 fn list_and_show_default_to_complete_json_views() {
     let fixture = Fixture::new();
 
-    let output = fixture.run(&["list"]);
+    let output = fixture.run(&["list", "key:rich"]);
     let listed: Vec<ItemView> = serde_json::from_str(stdout(&output)).unwrap();
     assert_eq!(listed.len(), 1);
     let item = &listed[0];
@@ -100,6 +110,65 @@ fn list_and_show_default_to_complete_json_views() {
     assert_eq!(stdout(&output), "[]\n");
 }
 
+#[test]
+fn list_filters_with_query_terms_and_orders_with_sort() {
+    let fixture = Fixture::new();
+    let keys = |args: &[&str]| {
+        let output = fixture.run(args);
+        let listed: Vec<ItemView> = serde_json::from_str(stdout(&output)).unwrap();
+        listed
+            .into_iter()
+            .map(|item| item.citation_key)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(keys(&["list", "hopper"]), ["late", "undated"]);
+    assert_eq!(
+        keys(&["list", "author:hopper", "type:book"]),
+        ["late"],
+        "terms are combined with and"
+    );
+    assert_eq!(
+        keys(&["list", "type:book"]),
+        ["late"],
+        "an entry type is matched whole"
+    );
+    assert_eq!(keys(&["list", "year:1800..1900"]), ["rich"]);
+    assert_eq!(
+        keys(&["list", "year:2000.."]),
+        ["late"],
+        "a year can come from the date field"
+    );
+    assert_eq!(keys(&["list", "collection:computing"]), ["rich"]);
+    assert_eq!(
+        keys(&["list", "--", "-collection:"]),
+        ["late", "undated"],
+        "a negated term needs -- to reach us"
+    );
+    assert_eq!(keys(&["list", "--sort=-year"]), ["late", "rich", "undated"]);
+    assert_eq!(
+        keys(&["list", "--sort", "title"]),
+        ["late", "rich", "undated"]
+    );
+    assert_eq!(
+        keys(&["list", "--sort=type,-key"]),
+        ["rich", "late", "undated"],
+        "later keys break ties"
+    );
+
+    let output = fixture.run(&["list", "key:rich", "--sort=-year", "--format", "human"]);
+    assert_eq!(stdout(&output), "rich\tarticle\tA Rich Item\n");
+
+    for args in [
+        ["list", "year:soon"].as_slice(),
+        ["list", "--sort", "-"].as_slice(),
+    ] {
+        let output = fixture.run(args);
+        assert!(!output.status.success(), "{args:?} was accepted");
+        assert!(output.stdout.is_empty());
+    }
+}
+
 /// JSON lists the complete names `--collection` takes back, including the
 /// ancestor the tree synthesizes; human mode nests them instead.
 #[test]
@@ -122,7 +191,7 @@ fn collection_list_defaults_to_flat_json_paths() {
 fn human_format_remains_available_without_a_json_alias() {
     let fixture = Fixture::new();
 
-    let output = fixture.run(&["list", "--format", "human"]);
+    let output = fixture.run(&["list", "key:rich", "--format", "human"]);
     assert_eq!(stdout(&output), "rich\tarticle\tA Rich Item\n");
 
     let output = fixture.run(&["show", "rich", "--format", "human"]);

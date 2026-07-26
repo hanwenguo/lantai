@@ -96,7 +96,7 @@ Start with the [Lantai user manual](docs/index.md):
 - [native REST API reference](docs/rest-api.md);
 - [Zotero Connector setup](docs/zotero-connector.md);
 - [backups, recovery, security, and troubleshooting](docs/operations.md);
-- [jq, fzf, and official extension workflows](docs/cli-workflows.md);
+- [searching, the interactive picker, and extension workflows](docs/cli-workflows.md);
 - [custom post-save hooks](docs/post-save-hooks.md).
 
 Developer references are kept separately in the [implementation

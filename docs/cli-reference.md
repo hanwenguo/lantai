@@ -86,24 +86,50 @@ where the library cannot be read at all and no report is produced.
 ### `list`
 
 ```text
-lantai list [QUERY] [--collection COLLECTION] [--format json|human]
+lantai list [TERM...] [--collection COLLECTION] [--sort KEYS] [--format json|human]
 ```
 
 Returns a JSON array in bibliography source order, or tab-separated
-key/type/title rows in human mode. `QUERY` is a case-insensitive substring over
-citation keys and expanded field values. `--collection` matches the named
-collection and everything nested under it, case-insensitively, so
-`--collection Projects` also finds items in `Projects/IfT`. Both filters are
-ANDed. An empty result is `[]`.
+key/type/title rows in human mode. An empty result is `[]`.
+
+Each argument is one query term, and an item must match all of them:
+
+| Term | Matches |
+| --- | --- |
+| `WORD` | citation key or any expanded field value contains `WORD` |
+| `key:WORD` | citation key contains `WORD` |
+| `type:TYPE` | entry type is exactly `TYPE`, so `type:book` excludes `inbook` |
+| `collection:NAME` | `NAME` or anything nested under it, as `--collection` does |
+| `year:YEAR` | published in `YEAR`; ranges are `YEAR..`, `..YEAR`, `YEAR..YEAR` |
+| `NAME:WORD` | field `NAME` contains `WORD` |
+| `NAME:` | field `NAME` is present at all |
+| `any:WORD` | as `WORD`, for values whose own text contains a colon |
+| `-TERM` | negates any of the above |
+
+Matching is case-insensitive throughout. The year comes from the `year` field,
+falling back to the leading digits of `date`; an item without one never matches
+a `year:` term. A term whose prefix before the first colon looks like a field
+name is read as a scope, so a literal `https://…` needs `any:`. A malformed
+year or sort key is an error rather than a silent mismatch.
+
+Negated terms have to follow `--`, so that a mistyped option is still reported
+as one rather than quietly becoming a search:
 
 ```sh
-lantai list attention --collection Reviewed
-lantai list --collection Projects
+lantai list attention author:vaswani
+lantai list type:article collection:Reviewed --sort=-year
+lantai list year:2019..2024 doi:
+lantai list -- -collection:            # filed nowhere
 lantai list --format human
 ```
 
-For entry-type filters, regular expressions, and compound conditions, use the
-official `query` extension described in [CLI workflows](cli-workflows.md).
+`--sort` takes comma-separated keys — `key`, `type`, `title`, `year`, or any
+field name — each optionally prefixed with `-` for descending. Years compare
+numerically and everything else case-insensitively; items missing the value
+sort last in both directions, and equal items keep bibliography order. Without
+`--sort`, the order is the bibliography's.
+
+`--collection` still works and is ANDed with the terms.
 
 ### `show`
 
@@ -338,8 +364,8 @@ omits that section entirely when nothing is installed. Each command is listed
 with the one-line description it declares in a `# lantai-about:` comment;
 Lantai reads that line from the file and never runs the executable to obtain
 it. See the [extension guide](../extension/README.md) for the environment
-contract, the description convention, and the six shipped commands: `table`,
-`query`, `pick`, `open`, `batch-collection`, and `api-list`.
+contract, the description convention, and the three shipped commands: `pick`,
+`open`, and `batch-collection`.
 
 Use `lantai COMMAND --help` as the executable source of truth for command-line
 spelling.
