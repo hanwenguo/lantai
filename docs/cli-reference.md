@@ -21,9 +21,9 @@ authentication, and transport failures write diagnostics to stderr and exit
 nonzero. `check` also exits nonzero when it finds errors. Successful JSON
 output contains no diagnostics.
 
-`list` and `show` default to JSON and accept `--format json|human`. Other
-commands default to human output and accept `--json` where listed. `export`
-writes BibLaTeX rather than JSON.
+`list`, `show`, and `collection list` default to JSON and accept
+`--format json|human`. Other commands default to human output and accept
+`--json` where listed. `export` writes BibLaTeX rather than JSON.
 
 The CLI uses the configured daemon when it is reachable and authenticated,
 otherwise it uses locked direct-file access. This fallback does not occur for
@@ -117,25 +117,31 @@ and expanded fields.
 ### `collection list`
 
 ```text
-lantai collection list [--json]
+lantai collection list [--format json|human]
 ```
 
-Lists every collection in the library. Human output nests on `/` and shows leaf
-names; `--json` is a flat array of complete names in the same order, which is
-what `--collection` expects back.
+Lists every collection in the library. JSON is a flat array of complete names,
+which is what `--collection` expects back; human output presents the same names
+in the same order, nested on `/` and showing leaf names.
 
 ```console
 $ lantai collection list
+[
+  "Inbox",
+  "Projects",
+  "Projects/IfT"
+]
+$ lantai collection list --format human
 Inbox
 Projects
   IfT
 ```
 
 A collection exists only through the items in it, so an empty library lists
-nothing. Ancestors are shown even when no item belongs to them directly: a
-library holding only `Projects/IfT` still lists `Projects`. Every listed name
-works as a `--collection` filter, including such an ancestor, because the
-filter matches nested collections too.
+nothing and its JSON is `[]`. Ancestors are shown even when no item belongs to
+them directly: a library holding only `Projects/IfT` still lists `Projects`.
+Every listed name works as a `--collection` filter, including such an ancestor,
+because the filter matches nested collections too.
 
 ## Edit
 

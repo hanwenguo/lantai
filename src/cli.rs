@@ -175,9 +175,6 @@ enum Command {
     Collection {
         #[command(subcommand)]
         action: CollectionAction,
-
-        #[command(flatten)]
-        output: JsonOutput,
     },
 
     /// Remove an entry and move its managed attachments to trash.
@@ -252,13 +249,20 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum CollectionAction {
     /// List every collection in the library.
-    List,
+    List {
+        /// Select JSON or the legacy nested display (defaults to JSON).
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
+    },
 
     /// Add the item to one or more collections.
     Add {
         id: String,
         #[arg(required = true, value_name = "COLLECTION")]
         collections: Vec<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 
     /// Remove the item from one or more collections, matching case-insensitively.
@@ -266,6 +270,9 @@ enum CollectionAction {
         id: String,
         #[arg(required = true, value_name = "COLLECTION")]
         collections: Vec<String>,
+
+        #[command(flatten)]
+        output: JsonOutput,
     },
 }
 
@@ -849,7 +856,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let summaries = backend.list(query.as_deref(), collection.as_deref())?;
-            if item_output_is_json(format) {
+            if output_is_json(format) {
                 print_json(&summaries)
             } else {
                 for item in summaries {
@@ -939,7 +946,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         Command::Show { id, format } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let item = backend.get(&id)?;
-            if item_output_is_json(format) {
+            if output_is_json(format) {
                 print_json(&item)
             } else {
                 print_item(&item);
@@ -1014,12 +1021,22 @@ fn run_cli(cli: Cli) -> Result<()> {
             );
             print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
         }
-        Command::Collection { action, output } => {
+        Command::Collection { action } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            let (id, changed, add) = match action {
-                CollectionAction::List => return list_collections(&mut backend, output.json),
-                CollectionAction::Add { id, collections } => (id, collections, true),
-                CollectionAction::Remove { id, collections } => (id, collections, false),
+            let (id, changed, add, json) = match action {
+                CollectionAction::List { format } => {
+                    return list_collections(&mut backend, output_is_json(format));
+                }
+                CollectionAction::Add {
+                    id,
+                    collections,
+                    output,
+                } => (id, collections, true, output.json),
+                CollectionAction::Remove {
+                    id,
+                    collections,
+                    output,
+                } => (id, collections, false, output.json),
             };
             let before = backend.before_save()?;
             let result = backend.change_collections(&id, &changed, add)?;
@@ -1029,7 +1046,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 HookItems::Uuids(vec![result.uuid]),
                 Vec::new(),
             );
-            print_mutation_result("Updated", &result.citation_key, result.uuid, output.json)
+            print_mutation_result("Updated", &result.citation_key, result.uuid, json)
         }
         Command::Remove { id, output } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
@@ -1483,12 +1500,13 @@ fn confirm(message: &str, default: bool) -> Result<bool> {
         .map_err(|source| Error::Prompt { source })
 }
 
-/// Print the collection tree, or its paths as JSON.
+/// Print the collection paths as JSON, or the tree in human mode.
 ///
-/// Human output nests on `/` the way the Connector picker does; JSON stays flat
-/// because a script wants the name it would pass back to `--collection`. Every
-/// path listed does match there, including a synthesized ancestor that no item
-/// belongs to directly, because `--collection` matches nested collections too.
+/// JSON is the default and stays flat because a script wants the name it would
+/// pass back to `--collection`; human output nests on `/` the way the Connector
+/// picker does. Every path listed does match there, including a synthesized
+/// ancestor that no item belongs to directly, because `--collection` matches
+/// nested collections too.
 fn list_collections(backend: &mut Backend, json: bool) -> Result<()> {
     let tree = collections::tree(backend.collections()?);
     if json {
@@ -1737,7 +1755,7 @@ fn print_mutation_result(
     }
 }
 
-fn item_output_is_json(format: Option<OutputFormat>) -> bool {
+fn output_is_json(format: Option<OutputFormat>) -> bool {
     format != Some(OutputFormat::Human)
 }
 
@@ -2059,11 +2077,13 @@ mod tests {
         assert!(!exported.contains("@misc{second,"));
     }
 
+    /// Reading commands emit JSON unless `--format human` asks otherwise, and
+    /// they reject the legacy `--json` that mutations still accept.
     #[test]
-    fn item_output_defaults_to_json_without_a_legacy_json_flag() {
-        assert!(item_output_is_json(None));
-        assert!(item_output_is_json(Some(OutputFormat::Json)));
-        assert!(!item_output_is_json(Some(OutputFormat::Human)));
+    fn reading_output_defaults_to_json_without_a_legacy_json_flag() {
+        assert!(output_is_json(None));
+        assert!(output_is_json(Some(OutputFormat::Json)));
+        assert!(!output_is_json(Some(OutputFormat::Human)));
 
         let parsed = Cli::try_parse_from(["lantai", "list", "--format", "human"]).unwrap();
         assert!(matches!(
@@ -2073,8 +2093,27 @@ mod tests {
                 ..
             }
         ));
+        let parsed =
+            Cli::try_parse_from(["lantai", "collection", "list", "--format", "human"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::Collection {
+                action: CollectionAction::List {
+                    format: Some(OutputFormat::Human)
+                }
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["lantai", "collection", "list"])
+                .unwrap()
+                .command,
+            Command::Collection {
+                action: CollectionAction::List { format: None }
+            }
+        ));
         assert!(Cli::try_parse_from(["lantai", "list", "--json"]).is_err());
         assert!(Cli::try_parse_from(["lantai", "show", "item", "--json"]).is_err());
+        assert!(Cli::try_parse_from(["lantai", "collection", "list", "--json"]).is_err());
         assert!(Cli::try_parse_from(["lantai", "check", "--json"]).is_ok());
         assert!(
             Cli::try_parse_from(["lantai", "collection", "add", "item", "Reviewed", "--json"])

@@ -117,8 +117,8 @@ removing `Projects` leaves an item in `Projects/IfT` alone.
 Nesting is spelling. A name containing `/` is read as a child of its prefix, so
 `ResearchTopics/Subtyping/SemanticSubtyping` displays under `Subtyping` under
 `ResearchTopics`. The stored value is still one flat name; `/` only affects how
-`collection list` and the Connector picker group it, and an ancestor is shown
-even when no item belongs to it directly.
+`collection list --format human` and the Connector picker group it, and an
+ancestor is shown even when no item belongs to it directly.
 
 This is what `lantai import` maps a Zotero collection tree onto, and what the
 [Connector's save popup](zotero-connector.md#collections-in-the-save-popup)

@@ -20,11 +20,12 @@ Use `--format human` when reading the legacy built-in displays directly:
 ```sh
 lantai list --format human
 lantai show vaswani2023attention --format human
+lantai collection list --format human
 ```
 
-`--json` is intentionally not accepted by `list` or `show`; use
-`--format json` when an explicit spelling is useful. Other built-ins expose
-`--json` when their default output is human-readable.
+`--json` is intentionally not accepted by `list`, `show`, or
+`collection list`; use `--format json` when an explicit spelling is useful.
+Other built-ins expose `--json` when their default output is human-readable.
 
 ## Item JSON
 

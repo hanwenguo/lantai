@@ -100,6 +100,24 @@ fn list_and_show_default_to_complete_json_views() {
     assert_eq!(stdout(&output), "[]\n");
 }
 
+/// JSON lists the complete names `--collection` takes back, including the
+/// ancestor the tree synthesizes; human mode nests them instead.
+#[test]
+fn collection_list_defaults_to_flat_json_paths() {
+    let fixture = Fixture::new();
+    stdout(&fixture.run(&["collection", "add", "rich", "Projects/IfT"]));
+
+    let output = fixture.run(&["collection", "list"]);
+    let listed: Vec<String> = serde_json::from_str(stdout(&output)).unwrap();
+    assert_eq!(listed, ["Computing", "history", "Projects", "Projects/IfT"]);
+
+    let output = fixture.run(&["collection", "list", "--format", "human"]);
+    assert_eq!(
+        stdout(&output),
+        "Computing\nhistory\nProjects\n  IfT\n".to_owned()
+    );
+}
+
 #[test]
 fn human_format_remains_available_without_a_json_alias() {
     let fixture = Fixture::new();
@@ -116,6 +134,7 @@ fn human_format_remains_available_without_a_json_alias() {
     for args in [
         ["list", "--json"].as_slice(),
         ["show", "rich", "--json"].as_slice(),
+        ["collection", "list", "--json"].as_slice(),
     ] {
         let output = fixture.run(args);
         assert!(!output.status.success());
