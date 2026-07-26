@@ -597,7 +597,7 @@ pub fn run() -> Result<i32> {
     // eighteen attributes means a new subcommand cannot be half-hidden.
     let mut command = Cli::command().mut_subcommands(|subcommand| subcommand.hide(true));
     if wants_help(env::args_os().skip(1)) {
-        let help = grouped_help(&command);
+        let help = grouped_help(&command, env::var_os("PATH").as_deref());
         command = command.after_help(help);
     }
     let matches = command.get_matches();
@@ -635,7 +635,7 @@ fn wants_help(arguments: impl IntoIterator<Item = OsString>) -> bool {
     false
 }
 
-fn grouped_help(command: &clap::Command) -> String {
+fn grouped_help(command: &clap::Command, path: Option<&OsStr>) -> String {
     let describe = |name: &str| {
         command
             .get_subcommands()
@@ -648,7 +648,7 @@ fn grouped_help(command: &clap::Command) -> String {
         .iter()
         .flat_map(|(_, names)| names.iter().copied())
         .collect::<BTreeSet<_>>();
-    let extensions = discover_extensions(env::var_os("PATH").as_deref(), &builtins);
+    let extensions = discover_extensions(path, &builtins);
     let width = builtins
         .iter()
         .map(|name| name.len())
@@ -680,20 +680,25 @@ fn grouped_help(command: &clap::Command) -> String {
         help.push('\n');
     }
 
-    let _ = writeln!(help, "{header}Custom commands:{header:#}");
-    if extensions.is_empty() {
-        help.push_str("  none on PATH; any executable named lantai-NAME becomes `lantai NAME`\n");
-    } else {
+    // No section at all when nothing is installed: a heading whose only content
+    // is "there is nothing here" is worth less than the line it occupies.
+    if !extensions.is_empty() {
+        let _ = writeln!(help, "{header}Custom commands:{header:#}");
         for (name, executable) in &extensions {
-            let _ = writeln!(
-                help,
-                "  {literal}{name}{literal:#}{}  {}",
-                pad(name),
-                executable.display()
-            );
+            match extension_about(executable) {
+                Some(about) => {
+                    let _ = writeln!(help, "  {literal}{name}{literal:#}{}  {about}", pad(name));
+                }
+                // An undeclared description leaves the name alone rather than a
+                // line of trailing spaces.
+                None => {
+                    let _ = writeln!(help, "  {literal}{name}{literal:#}");
+                }
+            }
         }
+        help.push('\n');
     }
-    help.push_str("\nRun `lantai COMMAND --help` for a command's own options.");
+    help.push_str("Run `lantai COMMAND --help` for a command's own options.");
     help
 }
 
@@ -735,6 +740,57 @@ fn discover_extensions(
         }
     }
     found
+}
+
+/// The marker an extension uses to describe itself in `lantai --help`.
+///
+/// Documented as `# lantai-about:`; the comment hash is matched separately so
+/// that the spacing an author happens to use does not silently cost them the
+/// description.
+const EXTENSION_ABOUT: &str = "lantai-about:";
+
+/// How far into a custom command to look for that marker.
+const EXTENSION_ABOUT_LINES: usize = 40;
+const EXTENSION_ABOUT_BYTES: usize = 8 * 1024;
+const EXTENSION_ABOUT_WIDTH: usize = 60;
+
+/// The one-line summary a custom command declares for `lantai --help`.
+///
+/// The file is read, never run. Rendering help must not execute whatever
+/// happens to be named `lantai-*` on `PATH`, so the description is a declared
+/// comment rather than something harvested from `--help` output. Only the
+/// first few kilobytes are examined, which bounds the cost when the executable
+/// turns out to be a large binary.
+fn extension_about(path: &std::path::Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = vec![0; EXTENSION_ABOUT_BYTES];
+    let read = std::io::Read::read(&mut file, &mut buffer).ok()?;
+    buffer.truncate(read);
+
+    String::from_utf8_lossy(&buffer)
+        .lines()
+        .take(EXTENSION_ABOUT_LINES)
+        .find_map(|line| {
+            line.trim_start()
+                .strip_prefix('#')?
+                .trim_start()
+                .strip_prefix(EXTENSION_ABOUT)
+        })
+        .map(|about| about.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|about| !about.is_empty())
+        .map(|mut about| {
+            // One over-long marker must not push every description off-screen.
+            if about.chars().count() > EXTENSION_ABOUT_WIDTH {
+                about = about
+                    .chars()
+                    .take(EXTENSION_ABOUT_WIDTH - 1)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned();
+                about.push('…');
+            }
+            about
+        })
 }
 
 #[cfg(unix)]
@@ -2092,6 +2148,117 @@ mod tests {
         );
     }
 
+    /// A `PATH` directory holding executable custom commands.
+    fn extension_dir(entries: &[(&str, &str)]) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, contents) in entries {
+            let path = directory.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        directory
+    }
+
+    #[test]
+    fn an_extension_declares_its_description_in_a_comment() {
+        let about = |contents: &str| {
+            let directory = extension_dir(&[("lantai-probe", contents)]);
+            extension_about(&directory.path().join("lantai-probe"))
+        };
+
+        assert_eq!(
+            about("#!/bin/sh\n# lantai-about: Render a table\n"),
+            Some("Render a table".to_owned())
+        );
+        assert_eq!(
+            about("#!/bin/sh\n#   lantai-about:   spaced   out   \n"),
+            Some("spaced out".to_owned()),
+            "surrounding and internal whitespace collapses"
+        );
+        assert_eq!(about("#!/bin/sh\necho hello\n"), None, "no marker");
+        assert_eq!(about("#!/bin/sh\n# lantai-about:   \n"), None, "empty text");
+        assert_eq!(
+            about(&format!("{}# lantai-about: Too late\n", "#\n".repeat(60))),
+            None,
+            "a marker past the line budget is not searched for"
+        );
+
+        // A binary that happens to be named lantai-* must not panic the help.
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("lantai-binary");
+        std::fs::write(&binary, [0xff, 0xfe, 0x00, 0x01, 0x80]).unwrap();
+        assert_eq!(extension_about(&binary), None);
+
+        let long = about(&format!(
+            "#!/bin/sh\n# lantai-about: {}\n",
+            "word ".repeat(40)
+        ))
+        .expect("a description");
+        assert!(
+            long.chars().count() <= EXTENSION_ABOUT_WIDTH && long.ends_with('…'),
+            "an over-long marker is truncated: {long}"
+        );
+    }
+
+    #[test]
+    fn the_custom_command_section_is_absent_when_nothing_is_installed() {
+        let empty = extension_dir(&[]);
+        let help = grouped_help(&Cli::command(), Some(empty.path().as_os_str()));
+        assert!(!help.contains("Custom commands"));
+        assert!(!help.contains("none on PATH"));
+        assert!(help.ends_with("Run `lantai COMMAND --help` for a command's own options."));
+        assert!(!help.contains("\n\n\n"), "no gap is left behind");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_commands_show_their_description_and_never_run() {
+        let ran = std::env::temp_dir().join(format!("lantai-help-ran-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ran);
+        let directory = extension_dir(&[
+            (
+                "lantai-described",
+                "#!/bin/sh\n# lantai-about: Does a described thing\n",
+            ),
+            ("lantai-bare", "#!/bin/sh\necho nothing declared\n"),
+            (
+                "lantai-trap",
+                &format!("#!/bin/sh\ntouch {}\n", ran.display()),
+            ),
+        ]);
+        let help = grouped_help(&Cli::command(), Some(directory.path().as_os_str()));
+
+        let line = |name: &str| {
+            help.lines()
+                .find(|line| line.contains(name))
+                .unwrap_or_else(|| panic!("{name} is listed"))
+                .to_owned()
+        };
+        assert!(line("described").contains("Does a described thing"));
+        let command = Cli::command();
+        let styles = command.get_styles();
+        assert!(
+            help.contains(&format!(
+                "  {}bare{:#}\n",
+                styles.get_literal(),
+                styles.get_header()
+            )),
+            "an undeclared description leaves the name alone, with nothing trailing"
+        );
+        assert!(
+            !help.contains(directory.path().to_str().unwrap()),
+            "the executable path is not shown"
+        );
+        assert!(
+            !ran.exists(),
+            "rendering help must never execute a custom command"
+        );
+    }
+
     /// The grouped sections must not look hand-made next to clap's own.
     #[test]
     fn the_grouped_help_wears_claps_styles() {
@@ -2100,11 +2267,13 @@ mod tests {
         let header = styles.get_header().to_string();
         let literal = styles.get_literal().to_string();
         let reset = format!("{:#}", styles.get_header());
-        let help = grouped_help(&command);
+        let directory = extension_dir(&[("lantai-mine", "#!/bin/sh\n# lantai-about: Mine\n")]);
+        let help = grouped_help(&command, Some(directory.path().as_os_str()));
 
         assert!(help.contains(&format!("{header}Setup and status:{reset}")));
         assert!(help.contains(&format!("{header}Custom commands:{reset}")));
         assert!(help.contains(&format!("  {literal}init{reset}")));
+        assert!(help.contains(&format!("  {literal}mine{reset}")));
 
         // Padding has to sit outside the escapes, or the descriptions stagger
         // by however many bytes the styling happens to take.

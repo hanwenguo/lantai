@@ -11,7 +11,8 @@ command, `lantai NAME ARGS...` searches `PATH` for an executable named
 Built-in commands always take precedence. Lantai never searches the current
 directory implicitly, so the directory containing an extension must be on
 `PATH`. Whatever is installed there is listed under "Custom commands" in
-`lantai --help`.
+`lantai --help`; that section is shown only when at least one extension is
+installed.
 
 ## Install the official extensions
 
@@ -79,6 +80,8 @@ example composes the JSON-first built-ins:
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Summarize items as compact JSON
+
 lantai_bin=${LANTAI:-lantai}
 args=()
 if [[ -n ${LANTAI_CONFIG:-} ]]; then
@@ -92,3 +95,19 @@ fi
 Keep data on standard output, diagnostics on standard error, quote every shell
 expansion, and avoid `eval`. Prefer UUIDs whenever the extension invokes a
 mutation.
+
+### Describe the command
+
+`lantai --help` shows the one-line description an extension declares for
+itself:
+
+```text
+# lantai-about: Summarize items as compact JSON
+```
+
+The line must appear within the first 40 lines. Lantai *reads* the file to find
+it and never runs the executable, because rendering help must not execute
+whatever happens to be named `lantai-*` on `PATH`. Leading whitespace and the
+spacing after `#` do not matter; a description longer than 60 characters is
+truncated in the listing. Omitting the marker only costs the description — the
+command is still listed and still runs.

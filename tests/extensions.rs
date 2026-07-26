@@ -197,6 +197,21 @@ fn official_extensions_are_executable_syntax_valid_and_self_documenting() {
             String::from_utf8_lossy(&help.stderr)
         );
         assert!(String::from_utf8_lossy(&help.stdout).starts_with("Usage: lantai "));
+
+        // The marker is what `lantai --help` shows; without it the command is
+        // listed with no hint of what it does.
+        let source = fs::read_to_string(&path).unwrap();
+        let about = source
+            .lines()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix('#')?
+                    .trim_start()
+                    .strip_prefix("lantai-about:")
+            })
+            .unwrap_or_else(|| panic!("{} declares no # lantai-about:", path.display()))
+            .trim();
+        assert!(!about.is_empty(), "{} has an empty description", name);
     }
 }
 

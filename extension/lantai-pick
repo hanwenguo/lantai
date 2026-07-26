@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Fuzzy-select an item
 usage() {
   cat <<'EOF'
 Usage: lantai pick [--id-only] [-- LIST_ARGS...]

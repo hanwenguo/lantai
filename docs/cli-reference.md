@@ -325,10 +325,15 @@ and `assigned_ids`. Review or back up hand-formatted source first.
 
 An unknown built-in name is dispatched Git-style: `lantai NAME ARGS...` runs
 `lantai-NAME` from `PATH`. Built-ins win, paths in names are rejected, and the
-child inherits standard streams and exit status. Whatever is installed appears
-under "Custom commands" in `lantai --help`. See the [extension guide](../extension/README.md)
-for the environment contract and the six shipped commands: `table`, `query`,
-`pick`, `open`, `batch-collection`, and `api-list`.
+child inherits standard streams and exit status.
+
+Whatever is installed appears under "Custom commands" in `lantai --help`, which
+omits that section entirely when nothing is installed. Each command is listed
+with the one-line description it declares in a `# lantai-about:` comment;
+Lantai reads that line from the file and never runs the executable to obtain
+it. See the [extension guide](../extension/README.md) for the environment
+contract, the description convention, and the six shipped commands: `table`,
+`query`, `pick`, `open`, `batch-collection`, and `api-list`.
 
 Use `lantai COMMAND --help` as the executable source of truth for command-line
 spelling.

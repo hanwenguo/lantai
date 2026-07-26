@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Render a key/type/title table
 usage() {
   cat <<'EOF'
 Usage: lantai table [LIST_ARGS...]

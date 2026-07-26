@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Fuzzy-select and open an attachment
 usage() {
   cat <<'EOF'
 Usage: lantai open [--print] [-- LIST_ARGS...]

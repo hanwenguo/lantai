@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Query the native REST API
 usage() {
   cat <<'EOF'
 Usage: lantai api-list [QUERY] [--collection COLLECTION]

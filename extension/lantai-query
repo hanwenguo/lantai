@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Select items with a jq predicate
 usage() {
   cat <<'EOF'
 Usage: lantai query FILTER [-- LIST_ARGS...]

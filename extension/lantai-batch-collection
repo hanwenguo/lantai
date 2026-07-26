@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# lantai-about: Preview or apply a batch membership change
 usage() {
   cat <<'EOF'
 Usage: lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]
