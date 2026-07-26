@@ -1,6 +1,6 @@
 # Lantai user manual
 
-This manual documents Lantai 0.2.0 as it is currently implemented. Lantai uses
+This manual documents Lantai 0.3.0 as it is currently implemented. Lantai uses
 one UTF-8 BibLaTeX file as its canonical library and exposes that library
 through a CLI, a native local REST API, and a Zotero-compatible browser capture
 endpoint.

@@ -1,4 +1,4 @@
-# Lantai 0.2.0: BibLaTeX-backed headless reference manager
+# Lantai 0.3.0: BibLaTeX-backed headless reference manager
 
 > **Development reference:** This file records implementation goals and design
 > decisions. For current user instructions, start with the [Lantai user
@@ -185,7 +185,7 @@ must be exposed as an explicit operation.
 
 ## Completion criteria
 
-Version 0.2.0 is complete when an unmodified Zotero Connector can save common web
+Version 0.3.0 is complete when an unmodified Zotero Connector can save common web
 items and attachments into Lantai; the result remains a valid, human-editable
 BibLaTeX library; external edits are detected without losing unmanaged source
 text; item, collection, and attachment operations work through both CLI and REST; and
