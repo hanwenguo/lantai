@@ -1,4 +1,4 @@
-# Installation and configuration
+# Installation and first steps
 
 [Back to the user manual](index.md).
 
@@ -51,65 +51,9 @@ The human output prints all three selected paths. `init --json` returns:
 }
 ```
 
-On macOS and XDG-based Unix systems, the default configuration path is
-`${XDG_CONFIG_HOME:-$HOME/.config}/lantai/config.toml`. Windows uses its
-platform configuration directory. Use the path printed by `init` when writing
-portable scripts. On Unix, Lantai creates the configuration with user-only
-permissions because it contains the API token.
-
-## Select a library
-
-Library selection uses this precedence:
-
-1. global `--library PATH`;
-2. `LANTAI_LIBRARY`;
-3. `library` in the configuration file.
-
-Examples:
-
-```sh
-lantai --library ./project.bib list
-LANTAI_LIBRARY=./project.bib lantai list
-lantai list
-```
-
-Relative paths are resolved against the current working directory. When the
-selected library differs from the configured library, Lantai uses the default
-adjacent attachment directory and does not contact the configured daemon.
-
-## Configuration reference
-
-A generated configuration has this shape:
-
-```toml
-library = "/home/me/Documents/references.bib"
-api_address = "127.0.0.1:23120"
-api_token = "a-random-64-character-token"
-attachment_limit_bytes = 536870912
-
-# Present only when init --attachments was used:
-attachment_root = "/home/me/Documents/reference-files"
-
-# Optional; see post-save-hooks.md:
-[post_save_hook]
-command = "/home/me/bin/after-lantai-save"
-args = ["--quiet"]
-timeout_seconds = 30
-```
-
-| Setting | Meaning |
-| --- | --- |
-| `library` | Configured bibliography path |
-| `attachment_root` | Optional managed attachment root; otherwise adjacent to the bibliography |
-| `api_address` | Native REST listener; it must resolve to a loopback address |
-| `api_token` | Bearer token required by every native REST request |
-| `attachment_limit_bytes` | Maximum uploaded/copied attachment size; default 512 MiB |
-| `post_save_hook` | Optional command run after actual library changes |
-
-Unknown configuration keys are rejected. `post_save_hook.command` cannot be
-empty and its timeout must be greater than zero. Protect the file as a secret:
-anyone who obtains `api_token` can mutate the library while the daemon is
-running.
+`init` prints the path it used. See [configuration](configuration.md) for that
+file's location, its settings, and how to point a single command at a different
+library.
 
 ## Direct and daemon-backed CLI operation
 

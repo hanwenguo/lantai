@@ -36,7 +36,8 @@ lantai --library PATH init [--attachments PATH] [--force] [--json]
 
 Creates or adopts a bibliography, creates managed attachment storage, and
 writes configuration. `--force` replaces configuration but never truncates the
-bibliography. See [Installation and configuration](getting-started.md).
+bibliography. See [installation](getting-started.md) and
+[configuration](configuration.md).
 
 ### `health`
 

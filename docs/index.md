@@ -7,7 +7,8 @@ endpoint.
 
 ## Start here
 
-1. [Install, initialize, and configure Lantai](getting-started.md).
+1. [Install Lantai and initialize a library](getting-started.md), then keep
+   [configuration](configuration.md) at hand for the settings file.
 2. Read the [library and storage model](library-model.md) before editing the
    `.bib` file or moving attachments.
 3. Use the [CLI reference](cli-reference.md) for ordinary library management.

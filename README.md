@@ -86,7 +86,8 @@ standalone PDFs, and popup tag updates.
 
 Start with the [Lantai user manual](docs/index.md):
 
-- [installation and configuration](docs/getting-started.md);
+- [installation and first steps](docs/getting-started.md);
+- [configuration](docs/configuration.md);
 - [library and storage model](docs/library-model.md);
 - [complete CLI reference](docs/cli-reference.md);
 - [native REST API reference](docs/rest-api.md);
