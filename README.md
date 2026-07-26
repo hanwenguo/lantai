@@ -5,7 +5,7 @@ library is a human-editable BibLaTeX file. It accepts captures from the
 unmodified Zotero browser Connector and provides a CLI and authenticated local
 REST API for managing bibliography entries and attachments.
 
-Lantai 0.3.0 supports:
+Lantai 0.4.0 supports:
 
 - source-aware BibLaTeX CRUD, validation, canonical formatting, and export;
 - stable item UUIDs, editable citation keys, normalized collections, and managed files;
@@ -25,7 +25,7 @@ deduplication. Importing a Zotero library maps its collection tree onto that
 namespace and imports neither its own tags nor its notes; browser capture
 likewise discards the keywords a translator scrapes. CSL-formatted
 bibliography export is part of the intended core scope, but is not available in
-Lantai 0.3.0. Lantai is not a Zotero profile or database replacement.
+Lantai 0.4.0. Lantai is not a Zotero profile or database replacement.
 
 ## Install from source
 
