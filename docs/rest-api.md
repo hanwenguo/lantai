@@ -103,7 +103,7 @@ Returns `200` even when the library is degraded:
 ```json
 {
   "status": "ok",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "revision": "...",
   "entries": 42,
   "warnings": 1,
