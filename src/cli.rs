@@ -656,26 +656,41 @@ fn grouped_help(command: &clap::Command) -> String {
         .max()
         .unwrap_or(0);
 
+    // Borrow clap's own styles so these sections are indistinguishable from the
+    // ones it renders itself. clap prints help through anstream, which drops
+    // the escapes again when stdout is not a terminal.
+    let styles = command.get_styles();
+    let header = styles.get_header();
+    let literal = styles.get_literal();
+    // Pad separately: a width specifier would count the escape bytes as
+    // characters and stagger the descriptions.
+    let pad = |name: &str| " ".repeat(width.saturating_sub(name.chars().count()));
+
     let mut help = String::new();
     for (heading, names) in COMMAND_GROUPS {
-        help.push_str(heading);
-        help.push_str(":\n");
+        let _ = writeln!(help, "{header}{heading}:{header:#}");
         for name in *names {
             let _ = writeln!(
                 help,
-                "  {name:width$}  {}",
+                "  {literal}{name}{literal:#}{}  {}",
+                pad(name),
                 describe(name).trim_end_matches('.')
             );
         }
         help.push('\n');
     }
 
-    help.push_str("Custom commands:\n");
+    let _ = writeln!(help, "{header}Custom commands:{header:#}");
     if extensions.is_empty() {
         help.push_str("  none on PATH; any executable named lantai-NAME becomes `lantai NAME`\n");
     } else {
         for (name, executable) in &extensions {
-            let _ = writeln!(help, "  {name:width$}  {}", executable.display());
+            let _ = writeln!(
+                help,
+                "  {literal}{name}{literal:#}{}  {}",
+                pad(name),
+                executable.display()
+            );
         }
     }
     help.push_str("\nRun `lantai COMMAND --help` for a command's own options.");
@@ -2074,6 +2089,41 @@ mod tests {
                 .get_subcommands()
                 .all(|subcommand| subcommand.get_about().is_some()),
             "the grouped help reads each description from the parser"
+        );
+    }
+
+    /// The grouped sections must not look hand-made next to clap's own.
+    #[test]
+    fn the_grouped_help_wears_claps_styles() {
+        let command = Cli::command();
+        let styles = command.get_styles();
+        let header = styles.get_header().to_string();
+        let literal = styles.get_literal().to_string();
+        let reset = format!("{:#}", styles.get_header());
+        let help = grouped_help(&command);
+
+        assert!(help.contains(&format!("{header}Setup and status:{reset}")));
+        assert!(help.contains(&format!("{header}Custom commands:{reset}")));
+        assert!(help.contains(&format!("  {literal}init{reset}")));
+
+        // Padding has to sit outside the escapes, or the descriptions stagger
+        // by however many bytes the styling happens to take.
+        let plain = help
+            .replace(&header, "")
+            .replace(&literal, "")
+            .replace(&reset, "");
+        let column = |name: &str| {
+            let line = plain
+                .lines()
+                .find(|line| line.starts_with(&format!("  {name}")))
+                .unwrap_or_else(|| panic!("{name} is listed"));
+            let rest = &line[2 + name.len()..];
+            2 + name.len() + (rest.len() - rest.trim_start().len())
+        };
+        assert_eq!(
+            column("init"),
+            column("collection"),
+            "descriptions share one column whatever the name's length"
         );
     }
 
