@@ -36,14 +36,13 @@ collections, attachments, ordering, and nullable identities.
 
 ```sh
 lantai table
-lantai table attention --type online --collection "Machine Learning"
+lantai table attention --collection "Machine Learning"
 ```
 
 All arguments are forwarded to the built-in `list`. Lantai's query is a
 case-insensitive substring match over citation keys and expanded fields;
-`--type` is a case-insensitive exact match and `--collection` matches that
-collection and everything nested under it. Supplied filters are combined with
-AND.
+`--collection` matches that collection and everything nested under it, case-
+insensitively. Both filters are combined with AND.
 
 ## Query with rich conditions
 
@@ -57,12 +56,13 @@ lantai query '
   and (($fields.date // "") | startswith("1843"))
   and (($fields.doi // "") != "")
   and any(.collections[]?; ascii_downcase == "history")
-' -- --type article
+' -- --collection Reviewed
 ```
 
 The result remains an array of complete item objects. Use built-in filters after
-`--` as an inexpensive first pass, then use the predicate for regular
-expressions, ranges, optional fields, and compound Boolean logic. If duplicate
+`--` as an inexpensive first pass, then use the predicate for entry types,
+regular expressions, ranges, optional fields, and compound Boolean logic —
+`.entry_type == "article"` is how a type filter is spelled now. If duplicate
 field names occur, the last source occurrence wins in `$fields`; the
 original `fields` array is never changed.
 
@@ -78,7 +78,7 @@ lantai pick -- --collection "Machine Learning" | jq
 For a query-then-mutate interface, request only the stable identifier:
 
 ```sh
-item_id=$(lantai pick --id-only -- attention --type online)
+item_id=$(lantai pick --id-only -- attention)
 if [ -n "$item_id" ]; then
   lantai collection add "$item_id" Reviewed
 fi
@@ -94,7 +94,7 @@ externally added entry must have a stable mutation identifier.
 against the bibliography directory, and uses the platform opener:
 
 ```sh
-lantai open -- --type article
+lantai open -- --collection Reviewed
 ```
 
 To compose with a different application without launching anything:
@@ -143,7 +143,7 @@ envelope:
 ```sh
 export LANTAI_TOKEN='read-from-a-secure-credential-source'
 
-lantai api-list attention --type online |
+lantai api-list attention --collection Reviewed |
   jq '.items[] | {uuid, citation_key, title, attachments}'
 ```
 

@@ -40,7 +40,7 @@ The scripts can also be called directly, such as
 | `lantai pick [--id-only] [-- LIST_ARGS...]` | Fuzzy-select an item | `jq`, `fzf` |
 | `lantai open [--print] [-- LIST_ARGS...]` | Fuzzy-select and open an attachment | `jq`, `fzf`, `open` or `xdg-open` |
 | `lantai batch-collection [--apply] COLLECTION FILTER [-- LIST_ARGS...]` | Preview or apply a batch membership change | `jq`; optional `column` |
-| `lantai api-list [QUERY] [--type TYPE] [--collection COLLECTION]` | Query the native REST API | `curl`, `jq` |
+| `lantai api-list [QUERY] [--collection COLLECTION]` | Query the native REST API | `curl`, `jq` |
 
 Run any command with `--help` for its complete interface. Arguments after
 `--` in `query`, `pick`, `open`, and `batch-collection` are passed to

@@ -129,21 +129,23 @@ Require `Authorization: Bearer <token>` on every `/api/v1/*` route. Return struc
 
 Item responses contain UUID, citation key, entry type, normalized fields, exact raw expressions for pass-through fields, collections, attachment metadata, and revision. `PATCH` supports normalized `set`, raw-field `set_raw`, `unset`, collection replacement, and citation-key rename. Mutations require `If-Match`; stale revisions return `409`.
 
-Item listing supports basic text search and collection/type filtering. Errors use a
+Item listing supports basic text search and collection filtering. Errors use a
 stable JSON code, a human-readable message, and optional structured details.
 
 ### CLI
 
 Provide:
 
-- `init`, `serve`, `health`
+- `init`, `serve`, `check`
 - `list`, `show`, `collection list`
 - `add --from <file|->` or `add --type … --field name=value`
 - `import <file.rdf>` for Zotero RDF exports, including files and collections
 - `set`, `set-raw`, `unset`, `collection add`, `collection remove`
 - `remove`, `attach`, `detach`
-- `export`, `format`, `check`
+- `export`, `format`
 - `trash list`, `trash purge`
+
+`check` subsumes the earlier separate `health`: one command answers both which paths are in use and whether the library is intact. REST keeps `/health` as a cheap cached liveness probe, which is a different question.
 
 Commands accept UUID or citation key. They use REST when the configured daemon is reachable and authenticated; otherwise they invoke the same locked catalog service directly. `list` and `show` emit rich JSON by default and accept `--format human`; other commands retain human-readable defaults with `--json` for automation. `export` emits the complete canonical file or a filtered selection to stdout/path.
 

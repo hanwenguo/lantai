@@ -8,8 +8,10 @@ use std::process::{Command as ProcessCommand, ExitStatus, Stdio};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::catalog::{Catalog, CatalogItem, CheckReport, ItemView};
-use crate::client::{ApiClient, ApiHealth};
+use crate::catalog::{
+    Catalog, CatalogItem, CheckIssue, CheckReport, CheckStatus, IssueSeverity, ItemView,
+};
+use crate::client::ApiClient;
 use crate::collections;
 use crate::config::{
     Config, DEFAULT_ATTACHMENT_LIMIT_BYTES, LIBRARY_ENV, absolutize, default_config_path,
@@ -59,12 +61,6 @@ enum Command {
         output: JsonOutput,
     },
 
-    /// Report whether the configured library and attachment directory are accessible.
-    Health {
-        #[command(flatten)]
-        output: JsonOutput,
-    },
-
     /// Run the authenticated local REST API.
     Serve,
 
@@ -72,10 +68,6 @@ enum Command {
     List {
         /// Match citation key, title, or field text.
         query: Option<String>,
-
-        /// Include only this entry type.
-        #[arg(long = "type")]
-        entry_type: Option<String>,
 
         /// Include only entries in this collection.
         #[arg(long)]
@@ -304,14 +296,17 @@ struct InitOutput<'a> {
     config: &'a std::path::Path,
 }
 
+/// `check` reports the selected paths alongside the diagnostic report, so one
+/// command answers both "which library am I talking to" and "is it intact".
+///
+/// The report is flattened rather than copied field by field, so anything added
+/// to `CheckReport` reaches this output too.
 #[derive(Serialize)]
-struct HealthOutput<'a> {
-    status: &'a str,
+struct CheckOutput<'a> {
     library: &'a std::path::Path,
     attachments: &'a std::path::Path,
-    entries: usize,
-    warnings: usize,
-    errors: usize,
+    #[serde(flatten)]
+    report: &'a CheckReport,
 }
 
 struct Backend {
@@ -388,37 +383,15 @@ impl Backend {
         }
     }
 
-    fn health(&mut self) -> Result<ApiHealth> {
+    fn list(&mut self, query: Option<&str>, collection: Option<&str>) -> Result<Vec<ItemView>> {
         match &mut self.mode {
-            BackendMode::Daemon(client) => client.health(),
-            BackendMode::Direct(store) => {
-                let report = store.check()?;
-                Ok(ApiHealth {
-                    status: if report.errors == 0 { "ok" } else { "degraded" }.to_owned(),
-                    revision: String::new(),
-                    entries: report.entries,
-                    warnings: report.warnings,
-                    errors: report.errors,
-                    disk_error: None,
-                })
-            }
-        }
-    }
-
-    fn list(
-        &mut self,
-        query: Option<&str>,
-        entry_type: Option<&str>,
-        collection: Option<&str>,
-    ) -> Result<Vec<ItemView>> {
-        match &mut self.mode {
-            BackendMode::Daemon(client) => client.list(query, entry_type, collection),
+            BackendMode::Daemon(client) => client.list(query, collection),
             BackendMode::Direct(_) => {
                 let contents = self.layout.read_utf8()?;
                 let catalog = Catalog::parse(&self.layout.bibliography, &contents)?;
                 Ok(catalog
                     .items()
-                    .filter(|item| matches_item(item, query, entry_type, collection))
+                    .filter(|item| matches_item(item, query, collection))
                     .map(ItemView::from)
                     .collect())
             }
@@ -428,7 +401,7 @@ impl Backend {
     /// Every collection in the library, deduped and ordered.
     fn collections(&mut self) -> Result<BTreeSet<String>> {
         Ok(collections::of_items(
-            self.list(None, None, None)?
+            self.list(None, None)?
                 .into_iter()
                 .map(|item| item.collections),
         ))
@@ -569,14 +542,38 @@ impl Backend {
         }
     }
 
-    fn check(&self) -> Result<CheckReport> {
-        match &self.mode {
-            BackendMode::Daemon(client) => client.check(),
+    fn check(&mut self) -> Result<CheckReport> {
+        match &mut self.mode {
+            BackendMode::Daemon(client) => {
+                let mut report = client.check()?;
+                // `/api/v1/check` recomputes from disk, so it cannot see the
+                // daemon's own trouble: after a failed write or a dead watcher
+                // the process serves a stale revision and refuses mutations
+                // while the library on disk still looks perfectly fine.
+                if let Some(disk_error) = client.health()?.disk_error {
+                    report.issues.push(CheckIssue {
+                        severity: IssueSeverity::Error,
+                        code: "daemon-disk-error".to_owned(),
+                        message: format!("the running daemon reported: {disk_error}"),
+                        citation_key: None,
+                        line: None,
+                        column: None,
+                    });
+                    report.errors += 1;
+                    report.status = CheckStatus::Degraded;
+                }
+                Ok(report)
+            }
             BackendMode::Direct(store) => store.check(),
         }
     }
 }
 
+/// The built-in commands, grouped for `--help`.
+///
+/// clap renders one flat list, which for eighteen commands tells a newcomer
+/// nothing. Only the names live here; each description is read back from the
+/// parser, and a test keeps the two in step.
 pub fn run() -> Result<i32> {
     run_parsed(Cli::parse())
 }
@@ -601,35 +598,6 @@ fn run_cli(cli: Cli) -> Result<()> {
             attachments,
             output,
         } => init(cli.library, attachments, output.json, &config_path, force),
-        Command::Health {
-            output: json_output,
-        } => {
-            let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            if !backend.layout.attachments.is_dir() {
-                return Err(Error::LibraryNotFile {
-                    path: backend.layout.attachments,
-                });
-            }
-            let health = backend.health()?;
-            let output = HealthOutput {
-                status: &health.status,
-                library: &backend.layout.bibliography,
-                attachments: &backend.layout.attachments,
-                entries: health.entries,
-                warnings: health.warnings,
-                errors: health.errors,
-            };
-            if json_output.json {
-                print_json(&output)
-            } else {
-                println!(
-                    "{}: {}",
-                    health.status,
-                    backend.layout.bibliography.display()
-                );
-                Ok(())
-            }
-        }
         Command::Serve => {
             let mut config = Config::load(&config_path)?;
             let configured_library = absolutize(&config.library)?;
@@ -650,16 +618,11 @@ fn run_cli(cli: Cli) -> Result<()> {
         }
         Command::List {
             query,
-            entry_type,
             collection,
             format,
         } => {
             let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
-            let summaries = backend.list(
-                query.as_deref(),
-                entry_type.as_deref(),
-                collection.as_deref(),
-            )?;
+            let summaries = backend.list(query.as_deref(), collection.as_deref())?;
             if item_output_is_json(format) {
                 print_json(&summaries)
             } else {
@@ -960,12 +923,16 @@ fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Command::Check { output } => {
-            let backend = Backend::load(cli.library.as_deref(), &config_path)?;
+            let mut backend = Backend::load(cli.library.as_deref(), &config_path)?;
             let report = backend.check()?;
             if output.json {
-                print_json(&report)?;
+                print_json(&CheckOutput {
+                    library: &backend.layout.bibliography,
+                    attachments: &backend.layout.attachments,
+                    report: &report,
+                })?;
             } else {
-                print_check(&report);
+                print_check(&backend.layout, &report);
             }
             if report.errors > 0 {
                 Err(Error::CheckFailed {
@@ -1122,15 +1089,7 @@ fn configured_layout(library: PathBuf, config: Option<&Config>) -> Result<Librar
     }
 }
 
-fn matches_item(
-    item: &CatalogItem,
-    query: Option<&str>,
-    entry_type: Option<&str>,
-    collection: Option<&str>,
-) -> bool {
-    if entry_type.is_some_and(|entry_type| !item.entry_type.eq_ignore_ascii_case(entry_type)) {
-        return false;
-    }
+fn matches_item(item: &CatalogItem, query: Option<&str>, collection: Option<&str>) -> bool {
     if collection.is_some_and(|collection| {
         !item
             .collections
@@ -1363,7 +1322,13 @@ fn print_item(item: &ItemView) {
     }
 }
 
-fn print_check(report: &CheckReport) {
+fn print_check(layout: &LibraryLayout, report: &CheckReport) {
+    println!(
+        "{}: {}",
+        report.status.as_str(),
+        layout.bibliography.display()
+    );
+    println!("Attachments: {}", layout.attachments.display());
     println!(
         "{} entries, {} warnings, {} errors",
         report.entries, report.warnings, report.errors
@@ -1533,9 +1498,7 @@ mod tests {
                     )
                     .unwrap();
                 let item = backend.get(&added.uuid.to_string()).unwrap();
-                let listed = backend
-                    .list(Some("After"), Some("article"), Some("REMOTE"))
-                    .unwrap();
+                let listed = backend.list(Some("After"), Some("REMOTE")).unwrap();
                 (added.uuid, attached.attachment_uuid, item, listed)
             })
             .await
@@ -1571,9 +1534,7 @@ mod tests {
             vec!["remote"]
         );
         assert_eq!(
-            direct
-                .list(Some("After"), Some("ARTICLE"), Some("remote"))
-                .unwrap(),
+            direct.list(Some("After"), Some("remote")).unwrap(),
             daemon_list
         );
         direct
@@ -1685,7 +1646,7 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["lantai", "list", "--json"]).is_err());
         assert!(Cli::try_parse_from(["lantai", "show", "item", "--json"]).is_err());
-        assert!(Cli::try_parse_from(["lantai", "health", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["lantai", "check", "--json"]).is_ok());
         assert!(
             Cli::try_parse_from(["lantai", "collection", "add", "item", "Reviewed", "--json"])
                 .is_ok()
@@ -1693,7 +1654,7 @@ mod tests {
     }
 
     #[test]
-    fn list_filters_by_collection() {
+    fn list_filters_by_collection_and_no_longer_by_type() {
         let parsed =
             Cli::try_parse_from(["lantai", "list", "--collection", "Projects/IfT"]).unwrap();
         assert!(matches!(
@@ -1703,7 +1664,8 @@ mod tests {
                 ..
             } if collection == "Projects/IfT"
         ));
-        assert!(Cli::try_parse_from(["lantai", "list", "--type", "article"]).is_ok());
+        assert!(Cli::try_parse_from(["lantai", "list", "--type", "article"]).is_err());
+        // `add` keeps its own --type; only the filter went away.
         assert!(Cli::try_parse_from(["lantai", "add", "--type", "article"]).is_ok());
     }
 
@@ -1722,11 +1684,12 @@ mod tests {
         // "Projects/IfT"; both are offered to the user, so both must filter.
         for target in collections::tree(collections::of_items([item.collections.clone()])) {
             assert!(
-                matches_item(&item, None, None, Some(&target.path)),
+                matches_item(&item, None, Some(&target.path)),
                 "{} was listed but matches nothing",
                 target.path
             );
         }
-        assert!(!matches_item(&item, None, None, Some("Projects/Other")));
+        assert!(!matches_item(&item, None, Some("Projects/Other")));
     }
+
 }

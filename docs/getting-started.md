@@ -104,14 +104,14 @@ before starting Lantai. See [Connector setup](zotero-connector.md).
 Verify the selected paths and the parsed library:
 
 ```sh
-lantai health
-lantai health --json
 lantai check
+lantai check --json
 ```
 
-`health` confirms that the bibliography and attachment directory are
-accessible. `check` performs the detailed integrity diagnostics described in
-[Operations and troubleshooting](operations.md).
+`check` reports which bibliography and attachment directory are in use and the
+detailed integrity diagnostics described in
+[Operations and troubleshooting](operations.md). Against a running daemon it
+also reports trouble only the daemon can see.
 
 Continue with the [library model](library-model.md) and [CLI
 reference](cli-reference.md).

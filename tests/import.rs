@@ -367,9 +367,14 @@ fn an_imported_library_passes_check_and_formats_idempotently() {
     let fixture = Fixture::new();
     stdout(&fixture.import(&["--json"]));
 
+    // `check` also answers what `health` used to: which paths are in use.
     let report = stdout(&fixture.run(&["check"])).to_owned();
     assert!(
-        report.starts_with("3 entries, 0 warnings, 0 errors"),
+        report.starts_with(&format!("ok: {}\n", fixture.bibliography.display())),
+        "{report}"
+    );
+    assert!(
+        report.contains("3 entries, 0 warnings, 0 errors"),
         "{report}"
     );
 

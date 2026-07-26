@@ -59,6 +59,16 @@ pub enum CheckStatus {
     Degraded,
 }
 
+impl CheckStatus {
+    /// The spelling used on the wire, so human output cannot drift from JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Degraded => "degraded",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueSeverity {

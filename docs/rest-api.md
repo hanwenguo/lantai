@@ -113,6 +113,9 @@ Returns `200` even when the library is degraded:
 `status` is `degraded` when the cached check has errors or a disk/watcher error.
 `disk_error` is included when present.
 
+This endpoint is a cheap liveness probe answered from the cache; for the full
+diagnostic report use [`GET /api/v1/check`](#get-apiv1check).
+
 ### `GET /api/v1/items`
 
 Optional query parameters:
@@ -120,7 +123,6 @@ Optional query parameters:
 | Parameter | Meaning |
 | --- | --- |
 | `q` | Case-insensitive substring in citation key or expanded field values |
-| `type` | Case-insensitive exact entry type |
 | `collection` | The collection and everything nested under it, case-insensitively |
 
 Unknown parameters are ignored. Both supplied filters are ANDed. The response preserves bibliography order:
@@ -133,7 +135,6 @@ Unknown parameters are ignored. Both supplied filters are ANDed. The response pr
 curl -sS -G \
   -H "Authorization: Bearer $LANTAI_TOKEN" \
   --data-urlencode 'q=attention' \
-  --data-urlencode 'type=article' \
   --data-urlencode 'collection=Reviewed' \
   "$LANTAI_API_URL/api/v1/items" | jq '.items'
 ```
@@ -254,8 +255,10 @@ Requires `If-Match` and may use an empty body. Returns:
 
 ### `GET /api/v1/check`
 
-Returns the same diagnostic report as `lantai check --json`: status, counts,
-and detailed issues. It never changes the library.
+Returns status, counts, and detailed issues. It never changes the library.
+`lantai check --json` returns the same report plus the `library` and
+`attachments` paths, which are a property of the caller's configuration rather
+than of the served library.
 
 ### `GET /api/v1/trash`
 

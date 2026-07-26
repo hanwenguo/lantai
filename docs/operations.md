@@ -33,7 +33,6 @@ To restore, stop writers, restore the `.bib` and matching attachment root to
 their configured paths, then run:
 
 ```sh
-lantai health
 lantai check
 ```
 
@@ -59,16 +58,21 @@ Recommended workflow for extensive edits:
 Do not directly reorganize managed attachment files without updating their
 BibLaTeX `file` references. Use `attach`, `detach`, and `remove` when possible.
 
-## Health and integrity
+## Integrity
 
-`lantai health --json` reports accessibility and high-level counts. `lantai
-check --json` is the detailed, non-mutating diagnostic interface. It can report
-malformed BibLaTeX, missing/invalid/duplicate identities, duplicate keys,
-malformed or unsafe attachment references, missing files, orphaned managed
-files, and stale temporary files.
+`lantai check` is the single, non-mutating diagnostic interface. It reports the
+bibliography and attachment paths actually in use and high-level counts, then
+details malformed BibLaTeX, missing/invalid/duplicate identities, duplicate
+keys, malformed or unsafe attachment references, missing files, orphaned
+managed files, and stale temporary files. Against a running daemon it adds what
+only that process knows, such as a failed write that left it serving a stale
+revision while the file on disk still parses.
 
 Warnings do not necessarily block mutations. Errors and malformed source can
 put the daemon in degraded state and cause `check` to exit nonzero.
+
+A daemon also answers `GET /api/v1/health`, a cheap cached liveness probe for
+monitoring; use `check` when you want to know what is actually wrong.
 
 ## Recover from a degraded bibliography
 
@@ -159,7 +163,6 @@ When investigating locally, record:
 
 ```sh
 lantai --version
-lantai health --json
 lantai check --json
 ```
 

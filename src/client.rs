@@ -133,21 +133,13 @@ impl ApiClient {
         Ok(health)
     }
 
-    pub fn list(
-        &mut self,
-        query: Option<&str>,
-        entry_type: Option<&str>,
-        collection: Option<&str>,
-    ) -> Result<Vec<ItemView>> {
+    pub fn list(&mut self, query: Option<&str>, collection: Option<&str>) -> Result<Vec<ItemView>> {
         let mut request = self
             .agent
             .get(self.url("/api/v1/items"))
             .header(AUTHORIZATION, &self.authorization);
         if let Some(query) = query {
             request = request.query("q", query);
-        }
-        if let Some(entry_type) = entry_type {
-            request = request.query("type", entry_type);
         }
         if let Some(collection) = collection {
             request = request.query("collection", collection);

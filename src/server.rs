@@ -76,8 +76,6 @@ struct ApiError {
 #[derive(Debug, Deserialize)]
 struct ListQuery {
     q: Option<String>,
-    #[serde(rename = "type")]
-    entry_type: Option<String>,
     collection: Option<String>,
 }
 
@@ -916,13 +914,6 @@ fn find_indexed_item(items: &[CatalogItem], id: &str) -> LantaiResult<CatalogIte
 }
 
 fn matches_query(item: &CatalogItem, query: &ListQuery) -> bool {
-    if query
-        .entry_type
-        .as_ref()
-        .is_some_and(|entry_type| !item.entry_type.eq_ignore_ascii_case(entry_type))
-    {
-        return false;
-    }
     if query.collection.as_ref().is_some_and(|collection| {
         !item
             .collections

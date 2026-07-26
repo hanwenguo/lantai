@@ -80,10 +80,15 @@ attachment_path=$(jq -rn --arg path "$encoded_path" '$path | @base64d')
 if [[ $attachment_path == /* ]]; then
   resolved_path=$attachment_path
 else
-  library=$(
-    "$LANTAI" "${lantai_args[@]}" health --json |
-      jq -er '.library'
-  )
+  # `check` reports the library path alongside its findings, and opening a file
+  # does not depend on the library being intact — so ignore the exit status but
+  # not the diagnostics, which are the only clue when it fails outright.
+  report=$("$LANTAI" "${lantai_args[@]}" check --json) || true
+  if [[ -z $report ]]; then
+    echo "lantai open: could not determine the library path" >&2
+    exit 1
+  fi
+  library=$(printf '%s' "$report" | jq -er '.library')
   resolved_path=$(dirname -- "$library")/$attachment_path
 fi
 

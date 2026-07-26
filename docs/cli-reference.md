@@ -39,16 +39,6 @@ writes configuration. `--force` replaces configuration but never truncates the
 bibliography. See [installation](getting-started.md) and
 [configuration](configuration.md).
 
-### `health`
-
-```text
-lantai health [--json]
-```
-
-Checks that the selected bibliography and attachment directory are accessible.
-JSON contains `status`, `library`, `attachments`, `entries`, `warnings`, and
-`errors`.
-
 ### `serve`
 
 ```text
@@ -59,29 +49,49 @@ Runs the native REST and Zotero Connector listeners until interrupted. Both
 listeners must bind successfully. See [REST API](rest-api.md) and [Connector
 setup](zotero-connector.md).
 
+### `check`
+
+```text
+lantai check [--json]
+```
+
+Reports which bibliography and attachment directory are in use, then diagnoses
+syntax, identities, attachment references, managed files, and stale temporary
+data without changing the library. A managed attachment that is missing is an
+error; an attachment directory that does not exist yet is not, because `init`
+and the first `attach` create it on demand. Against a daemon, `check` also
+reports trouble the daemon alone can see, such as a failed write that left it
+serving a stale revision.
+
+JSON contains `library`, `attachments`, `status`, counts, and an `issues` array;
+each issue has severity, code, message, optional citation key, and optional
+line/column. Errors produce a nonzero exit status. A script that only wants the
+paths can read stdout and ignore the status, but must still handle the case
+where the library cannot be read at all and no report is produced.
+
 ## Search
 
 ### `list`
 
 ```text
-lantai list [QUERY] [--type TYPE] [--collection COLLECTION] [--format json|human]
+lantai list [QUERY] [--collection COLLECTION] [--format json|human]
 ```
 
 Returns a JSON array in bibliography source order, or tab-separated
 key/type/title rows in human mode. `QUERY` is a case-insensitive substring over
-citation keys and expanded field values. `--type` is a case-insensitive exact
-filter; `--collection` matches the named collection and everything nested under
-it, case-insensitively, so `--collection Projects` also finds items in
-`Projects/IfT`. All supplied filters are ANDed. An empty result is `[]`.
+citation keys and expanded field values. `--collection` matches the named
+collection and everything nested under it, case-insensitively, so
+`--collection Projects` also finds items in `Projects/IfT`. Both filters are
+ANDed. An empty result is `[]`.
 
 ```sh
-lantai list attention --type article --collection Reviewed
+lantai list attention --collection Reviewed
 lantai list --collection Projects
 lantai list --format human
 ```
 
-For regular expressions and compound conditions, use the official `query`
-extension described in [CLI workflows](cli-workflows.md).
+For entry-type filters, regular expressions, and compound conditions, use the
+official `query` extension described in [CLI workflows](cli-workflows.md).
 
 ### `show`
 
@@ -289,17 +299,6 @@ lantai export [ID ...] [-o|--output PATH]
 Writes canonical BibLaTeX for the complete library or selected records. Output
 defaults to stdout; `--output -` also means stdout. Selection retains required
 support blocks such as strings and preambles.
-
-### `check`
-
-```text
-lantai check [--json]
-```
-
-Diagnoses syntax, identities, attachment references, managed files, and stale
-temporary data without changing the library. JSON contains `status`, counts,
-and an `issues` array; each issue has severity, code, message, optional citation
-key, and optional line/column. Errors produce a nonzero exit status.
 
 ### `format`
 

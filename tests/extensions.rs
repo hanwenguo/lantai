@@ -333,8 +333,8 @@ fn official_extensions_execute_the_documented_workflows() {
         "query",
         "($fields.author // \"\") | test(\"ada\"; \"i\")",
         "--",
-        "--type",
-        "article",
+        "--collection",
+        "needs-review",
     ]);
     assert!(
         query.status.success(),
@@ -425,14 +425,7 @@ fn official_extensions_execute_the_documented_workflows() {
     );
 
     let api = Command::new(env!("CARGO_BIN_EXE_lantai"))
-        .args([
-            "api-list",
-            "attention",
-            "--type",
-            "ONLINE",
-            "--collection",
-            "Keep",
-        ])
+        .args(["api-list", "attention", "--collection", "Keep"])
         .env("PATH", &fixture.path)
         .env("CURL_LOG", &fixture.curl_log)
         .env("LANTAI_TOKEN", "test-token")
@@ -449,7 +442,6 @@ fn official_extensions_execute_the_documented_workflows() {
     let curl_arguments = fs::read_to_string(&fixture.curl_log).unwrap();
     assert!(curl_arguments.contains("Authorization: Bearer test-token"));
     assert!(curl_arguments.contains("q=attention"));
-    assert!(curl_arguments.contains("type=ONLINE"));
     assert!(curl_arguments.contains("collection=Keep"));
     assert!(curl_arguments.contains("http://127.0.0.1:9999/api/v1/items"));
 
