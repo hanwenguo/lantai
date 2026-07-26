@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus, Stdio};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use directories::BaseDirs;
 use serde::Serialize;
 
 use crate::catalog::{
@@ -1020,23 +1021,26 @@ fn init(
     config_path: &std::path::Path,
     force: bool,
 ) -> Result<()> {
+    // Asking is the default. Supplying --library is the scripted contract, and
+    // --json or any non-terminal stream means nobody is there to answer.
+    // inquire draws on stderr, so that stream has to be a terminal too or the
+    // prompts would be written somewhere the user cannot see.
+    let interactive = library.is_none()
+        && !json
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+        && io::stderr().is_terminal();
+    if interactive {
+        return init_interactively(attachments, config_path, force);
+    }
+
     if config_path.exists() && !force {
         return Err(Error::ConfigAlreadyExists {
             path: config_path.to_owned(),
         });
     }
-    let library = library.ok_or(Error::LibraryNotConfigured)?;
-    let library = absolutize(&library)?;
-    let attachments = attachments.map(|path| absolutize(&path)).transpose()?;
-    let layout = match attachments.clone() {
-        Some(attachments) => LibraryLayout::with_attachments(library.clone(), attachments)?,
-        None => LibraryLayout::new(library.clone())?,
-    };
-    layout.initialize()?;
-
-    let mut config = Config::new(library);
-    config.attachment_root = attachments;
-    config.write(config_path, force)?;
+    let library = library.ok_or(Error::InitLibraryRequired)?;
+    let layout = write_initialized_library(library, attachments, config_path, force)?;
 
     let output = InitOutput {
         status: "initialized",
@@ -1052,6 +1056,206 @@ fn init(
         println!("Config: {}", config_path.display());
         Ok(())
     }
+}
+
+/// Ask for the values the configuration has no answer for, then write it.
+///
+/// Abandoning a prompt is an answer too, so it leaves the library untouched
+/// rather than reporting a failure.
+fn init_interactively(
+    attachments: Option<PathBuf>,
+    config_path: &std::path::Path,
+    force: bool,
+) -> Result<()> {
+    match prompt_and_initialize(attachments, config_path, force) {
+        Ok(None)
+        | Err(Error::Prompt {
+            source:
+                inquire::InquireError::OperationCanceled | inquire::InquireError::OperationInterrupted,
+        }) => {
+            println!("Nothing changed.");
+            Ok(())
+        }
+        Ok(Some(())) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// `Ok(None)` means the user declined; nothing has been written.
+fn prompt_and_initialize(
+    attachments: Option<PathBuf>,
+    config_path: &std::path::Path,
+    force: bool,
+) -> Result<Option<()>> {
+    let mut replace_confirmed = force;
+    if config_path.exists() && !force {
+        println!("{} already configures a library.", config_path.display());
+        if !confirm("Replace that configuration?", false)? {
+            return Ok(None);
+        }
+        replace_confirmed = true;
+    }
+
+    // An exported LANTAI_LIBRARY outranks the configuration, so offering
+    // anything else here would configure a library every later command ignores.
+    let environment_library = env::var_os(LIBRARY_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = &environment_library {
+        println!("{LIBRARY_ENV} is set to {}.", path.display());
+    }
+    let default_library = environment_library
+        .as_ref()
+        .map_or_else(default_library_path, |path| path.display().to_string());
+
+    let library = loop {
+        let answer = ask("Path to the bibliography", &default_library)?;
+        let path = absolutize(&expand_home(answer.trim()))?;
+        // Catch here what `initialize` would only reject after every remaining
+        // question had been answered.
+        if path.exists() && !path.is_file() {
+            eprintln!("{}", Error::LibraryNotFile { path });
+            continue;
+        }
+        match LibraryLayout::new(path.clone()) {
+            Ok(_) => break path,
+            Err(error) => eprintln!("{error}"),
+        }
+    };
+    if library.is_file() {
+        println!("Adopting the existing bibliography; it is never truncated.");
+    }
+    if let Some(parent) = library.parent().filter(|parent| !parent.is_dir())
+        && !confirm(&format!("Create {}?", parent.display()), true)?
+    {
+        return Ok(None);
+    }
+
+    let derived_attachments = LibraryLayout::new(library.clone())?.attachments;
+    let attachments = match attachments {
+        Some(attachments) => Some(attachments),
+        None => {
+            println!(
+                "Attachments will live in {}.",
+                derived_attachments.display()
+            );
+            if confirm("Store them somewhere else?", false)? {
+                // The derived path is the default, so an empty answer keeps it
+                // rather than resolving to the current directory.
+                let answer = ask(
+                    "Attachment directory",
+                    &derived_attachments.display().to_string(),
+                )?;
+                let answer = answer.trim();
+                (!answer.is_empty()).then(|| expand_home(answer))
+            } else {
+                None
+            }
+        }
+    };
+
+    println!();
+    println!("Bibliography: {}", library.display());
+    println!(
+        "Attachments:  {}",
+        attachments
+            .as_ref()
+            .unwrap_or(&derived_attachments)
+            .display()
+    );
+    println!("Config:       {}", config_path.display());
+    println!("The configuration holds a new random REST token, readable only by you.");
+    if !confirm("Initialize?", true)? {
+        return Ok(None);
+    }
+    if let Some(path) = &environment_library
+        && absolutize(path)? != library
+    {
+        println!();
+        println!(
+            "Note: {LIBRARY_ENV} still points at {}, which takes precedence over this configuration.",
+            path.display()
+        );
+    }
+
+    // Only replace a configuration the user agreed to replace: one that
+    // appeared while the questions were being answered is not that one.
+    let layout = write_initialized_library(library, attachments, config_path, replace_confirmed)?;
+    println!();
+    println!("Initialized {}", layout.bibliography.display());
+    println!("Attachments: {}", layout.attachments.display());
+    println!();
+    println!("Next:");
+    println!("  lantai add --type article --field 'title=...'   add an entry");
+    println!("  lantai import LIBRARY.rdf                       import from Zotero");
+    println!("  lantai serve                                    REST API and browser capture");
+    Ok(Some(()))
+}
+
+/// Create or adopt the bibliography and write the configuration beside it.
+fn write_initialized_library(
+    library: PathBuf,
+    attachments: Option<PathBuf>,
+    config_path: &std::path::Path,
+    force: bool,
+) -> Result<LibraryLayout> {
+    let library = absolutize(&library)?;
+    let attachments = attachments.map(|path| absolutize(&path)).transpose()?;
+    let layout = match attachments.clone() {
+        Some(attachments) => LibraryLayout::with_attachments(library.clone(), attachments)?,
+        None => LibraryLayout::new(library.clone())?,
+    };
+    layout.initialize()?;
+
+    let mut config = Config::new(library);
+    config.attachment_root = attachments;
+    config.write(config_path, force)?;
+    Ok(layout)
+}
+
+/// The bibliography path offered when the user has expressed no preference.
+fn default_library_path() -> String {
+    BaseDirs::new().map_or_else(
+        || "references.bib".to_owned(),
+        |dirs| dirs.home_dir().join("references.bib").display().to_string(),
+    )
+}
+
+/// Expand a leading `~`, the way a shell would have before the value reached us.
+///
+/// Only `~` alone and `~/...` mean "my home". `~alice/notes.bib` names another
+/// user's home, which we cannot resolve, and `~draft.bib` is simply a filename;
+/// both are left exactly as typed rather than silently relocated under `$HOME`.
+fn expand_home(path: &str) -> PathBuf {
+    let rest = match path.strip_prefix('~') {
+        Some("") => "",
+        Some(rest) if rest.starts_with('/') => rest.trim_start_matches('/'),
+        _ => return PathBuf::from(path),
+    };
+    BaseDirs::new().map_or_else(
+        || PathBuf::from(path),
+        |dirs| {
+            if rest.is_empty() {
+                dirs.home_dir().to_path_buf()
+            } else {
+                dirs.home_dir().join(rest)
+            }
+        },
+    )
+}
+
+fn ask(message: &str, default: &str) -> Result<String> {
+    inquire::Text::new(message)
+        .with_default(default)
+        .prompt()
+        .map_err(|source| Error::Prompt { source })
+}
+
+fn confirm(message: &str, default: bool) -> Result<bool> {
+    inquire::Confirm::new(message)
+        .with_default(default)
+        .prompt()
+        .map_err(|source| Error::Prompt { source })
 }
 
 /// Print the collection tree, or its paths as JSON.
@@ -1690,6 +1894,21 @@ mod tests {
             );
         }
         assert!(!matches_item(&item, None, Some("Projects/Other")));
+    }
+
+    #[test]
+    fn expanding_a_leading_tilde_only_means_this_user() {
+        let home = BaseDirs::new().expect("a home directory");
+        assert_eq!(expand_home("~"), home.home_dir());
+        assert_eq!(expand_home("~/refs.bib"), home.home_dir().join("refs.bib"));
+        // Another user's home is not ours to guess, and a filename that starts
+        // with a tilde is just a filename.
+        assert_eq!(
+            expand_home("~alice/refs.bib"),
+            PathBuf::from("~alice/refs.bib")
+        );
+        assert_eq!(expand_home("~draft.bib"), PathBuf::from("~draft.bib"));
+        assert_eq!(expand_home("refs.bib"), PathBuf::from("refs.bib"));
     }
 
 }

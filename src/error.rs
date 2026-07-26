@@ -24,8 +24,19 @@ pub enum Error {
     #[error("configuration file {path} already exists (use --force to replace it)")]
     ConfigAlreadyExists { path: PathBuf },
 
-    #[error("no library configured; pass --library, set LANTAI_LIBRARY, or run `lantai init`")]
+    #[error("no library configured; run `lantai init`, or pass --library or LANTAI_LIBRARY")]
     LibraryNotConfigured,
+
+    #[error(
+        "init needs a library; pass --library PATH, or run `lantai init` in an interactive terminal"
+    )]
+    InitLibraryRequired,
+
+    #[error("could not read the answer: {source}")]
+    Prompt {
+        #[source]
+        source: inquire::InquireError,
+    },
 
     #[error("library path has no file name: {path}")]
     InvalidLibraryPath { path: PathBuf },

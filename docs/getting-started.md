@@ -22,20 +22,34 @@ directory, normally `~/.cargo/bin`. Ensure that directory is on `PATH`.
 ## Initialize a library
 
 ```sh
-lantai init --library "$HOME/Documents/references.bib"
+lantai init
 ```
 
-`init` creates or adopts the bibliography, creates its managed attachment
-directory, and writes a configuration file containing a random REST bearer
-token. It never truncates an existing bibliography. It refuses to replace an
-existing configuration unless `--force` is supplied.
+`init` asks where the bibliography should live, offers the managed attachment
+directory beside it, and writes a configuration file containing a random REST
+bearer token. It creates or adopts the bibliography and never truncates an
+existing one. Answer the last question with no, or press Escape, and nothing is
+written.
 
-To put managed attachments elsewhere:
+Prompting needs a terminal on stdin, stdout, and stderr. If `LANTAI_LIBRARY` is
+set, `init` offers it as the answer, because that variable outranks the
+configuration for every later command.
+
+It refuses to replace an existing configuration unless you confirm, or unless
+`--force` is supplied.
+
+To answer in advance instead of being asked — in a script, a container image,
+or a dotfiles bootstrap — supply the values as flags:
 
 ```sh
 lantai init --library "$HOME/Documents/references.bib" \
   --attachments "$HOME/Documents/reference-files"
 ```
+
+Supplying `--library` selects the non-interactive path outright; `--attachments`
+and `--force` merely pre-answer their own questions. `--json` or a redirected
+stream also disables prompting, so automation behaves predictably and fails
+instead of waiting for an answer nobody can give.
 
 `init --json` returns:
 

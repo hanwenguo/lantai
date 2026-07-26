@@ -31,13 +31,22 @@ authentication or protocol errors.
 ### `init`
 
 ```text
-lantai --library PATH init [--attachments PATH] [--force] [--json]
+lantai init [--library PATH] [--attachments PATH] [--force] [--json]
 ```
 
 Creates or adopts a bibliography, creates managed attachment storage, and
-writes configuration. `--force` replaces configuration but never truncates the
-bibliography. See [installation](getting-started.md) and
-[configuration](configuration.md).
+writes configuration.
+
+With no `--library`, and when stdin, stdout, and stderr are all terminals, it
+asks where the library should live and offers the adjacent attachment
+directory; `--attachments` and `--force` pre-answer their questions. Supplying
+`--library`, passing `--json`, or redirecting any of those streams selects the
+non-interactive path, which asks nothing and fails when a required value is
+missing. `--force` replaces configuration but never truncates the bibliography.
+
+If `LANTAI_LIBRARY` is set it becomes the suggested answer, since it outranks
+the configuration for every later command. See
+[installation](getting-started.md) and [configuration](configuration.md).
 
 ### `serve`
 
