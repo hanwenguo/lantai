@@ -10,7 +10,8 @@ command, `lantai NAME ARGS...` searches `PATH` for an executable named
 
 Built-in commands always take precedence. Lantai never searches the current
 directory implicitly, so the directory containing an extension must be on
-`PATH`.
+`PATH`. Whatever is installed there is listed under "Custom commands" in
+`lantai --help`.
 
 ## Install the official extensions
 

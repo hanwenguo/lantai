@@ -12,6 +12,8 @@ install the scripts as described in the
 export PATH="$PWD/extension:$PATH"
 ```
 
+Once they are on `PATH`, `lantai --help` lists them under "Custom commands".
+
 Use `--format human` when reading the legacy built-in displays directly:
 
 ```sh

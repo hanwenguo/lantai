@@ -13,6 +13,9 @@ arguments accept a stable UUID or an unambiguous citation key. Prefer UUIDs in
 scripts. See the [library model](library-model.md) for identity and the shared
 [item JSON schema](library-model.md#public-item-json).
 
+Commands are grouped in `lantai --help` the way they are grouped below, and
+that listing also names any custom commands installed on `PATH`.
+
 Successful commands exit zero. Usage, configuration, validation, storage,
 authentication, and transport failures write diagnostics to stderr and exit
 nonzero. `check` also exits nonzero when it finds errors. Successful JSON
@@ -322,7 +325,8 @@ and `assigned_ids`. Review or back up hand-formatted source first.
 
 An unknown built-in name is dispatched Git-style: `lantai NAME ARGS...` runs
 `lantai-NAME` from `PATH`. Built-ins win, paths in names are rejected, and the
-child inherits standard streams and exit status. See the [extension guide](../extension/README.md)
+child inherits standard streams and exit status. Whatever is installed appears
+under "Custom commands" in `lantai --help`. See the [extension guide](../extension/README.md)
 for the environment contract and the six shipped commands: `table`, `query`,
 `pick`, `open`, `batch-collection`, and `api-list`.
 

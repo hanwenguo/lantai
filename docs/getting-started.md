@@ -82,6 +82,9 @@ lantai attach lovelace1843sketch ./paper.pdf --mime application/pdf
 lantai export lovelace1843sketch --output selected.bib
 ```
 
+`lantai --help` groups the commands by what they are for and lists any custom
+commands installed on `PATH`.
+
 ## Direct and daemon-backed CLI operation
 
 Ordinary commands do not require a daemon. When a command selects the same

@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus, Stdio};
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use directories::BaseDirs;
 use serde::Serialize;
 
@@ -575,8 +576,161 @@ impl Backend {
 /// clap renders one flat list, which for eighteen commands tells a newcomer
 /// nothing. Only the names live here; each description is read back from the
 /// parser, and a test keeps the two in step.
+/// A custom command is an executable named `lantai-NAME` on `PATH`; both the
+/// dispatcher and the help listing derive the spelling from here.
+const EXTENSION_PREFIX: &str = "lantai-";
+
+const COMMAND_GROUPS: &[(&str, &[&str])] = &[
+    ("Setup and status", &["init", "serve", "check"]),
+    ("Search", &["list", "show", "collection"]),
+    (
+        "Edit",
+        &["add", "import", "set", "set-raw", "unset", "remove"],
+    ),
+    ("Attachments", &["attach", "detach", "trash"]),
+    ("Output", &["export", "format"]),
+];
+
 pub fn run() -> Result<i32> {
-    run_parsed(Cli::parse())
+    // Hiding every built-in leaves clap's own command list empty, so the
+    // grouped listing below is the only one; doing it here rather than with
+    // eighteen attributes means a new subcommand cannot be half-hidden.
+    let mut command = Cli::command().mut_subcommands(|subcommand| subcommand.hide(true));
+    if wants_help(env::args_os().skip(1)) {
+        let help = grouped_help(&command);
+        command = command.after_help(help);
+    }
+    let matches = command.get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    run_parsed(cli)
+}
+
+/// Whether this invocation is going to print the *top-level* help.
+///
+/// Discovering extensions reads every `PATH` directory, so it is worth doing
+/// only when the listing is about to be displayed. The grouped help hangs off
+/// the root command, so a subcommand's own `--help` never shows it — stopping
+/// at the first subcommand keeps `lantai list --help`, the form this very help
+/// text recommends, from paying for a scan nobody sees.
+fn wants_help(arguments: impl IntoIterator<Item = OsString>) -> bool {
+    let mut arguments = arguments.into_iter().peekable();
+    if arguments.peek().is_none() {
+        return true;
+    }
+    let mut expects_value = false;
+    for argument in arguments {
+        if std::mem::take(&mut expects_value) {
+            continue;
+        }
+        match argument.to_str() {
+            Some("-h" | "--help" | "help") => return true,
+            // Global options precede the subcommand and take a value.
+            Some("--library" | "--config") => expects_value = true,
+            // Anything else is the subcommand (or its arguments), whose help
+            // clap renders on its own.
+            Some(value) if !value.starts_with('-') => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn grouped_help(command: &clap::Command) -> String {
+    let describe = |name: &str| {
+        command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == name)
+            .and_then(clap::Command::get_about)
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    };
+    let builtins = COMMAND_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let extensions = discover_extensions(env::var_os("PATH").as_deref(), &builtins);
+    let width = builtins
+        .iter()
+        .map(|name| name.len())
+        .chain(extensions.keys().map(String::len))
+        .max()
+        .unwrap_or(0);
+
+    let mut help = String::new();
+    for (heading, names) in COMMAND_GROUPS {
+        help.push_str(heading);
+        help.push_str(":\n");
+        for name in *names {
+            let _ = writeln!(
+                help,
+                "  {name:width$}  {}",
+                describe(name).trim_end_matches('.')
+            );
+        }
+        help.push('\n');
+    }
+
+    help.push_str("Custom commands:\n");
+    if extensions.is_empty() {
+        help.push_str("  none on PATH; any executable named lantai-NAME becomes `lantai NAME`\n");
+    } else {
+        for (name, executable) in &extensions {
+            let _ = writeln!(help, "  {name:width$}  {}", executable.display());
+        }
+    }
+    help.push_str("\nRun `lantai COMMAND --help` for a command's own options.");
+    help
+}
+
+/// Git-style custom commands reachable on `PATH`.
+///
+/// The first `lantai-NAME` on `PATH` wins, matching the executable that would
+/// actually run. A built-in of the same name always wins, so listing one here
+/// would be a lie. Unreadable directories are skipped: help must never fail.
+fn discover_extensions(
+    path: Option<&OsStr>,
+    builtins: &BTreeSet<&str>,
+) -> BTreeMap<String, PathBuf> {
+    let mut found = BTreeMap::new();
+    let Some(path) = path else {
+        return found;
+    };
+    for directory in env::split_paths(path) {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(name) = file_name
+                .to_str()
+                .and_then(|name| name.strip_prefix(EXTENSION_PREFIX))
+            else {
+                continue;
+            };
+            if name.is_empty() || builtins.contains(name) {
+                continue;
+            }
+            // Follow symlinks: installing an extension by linking it into a
+            // PATH directory is normal, and dispatch resolves the link too, so
+            // inspecting the link itself would hide a command that works.
+            if !std::fs::metadata(entry.path()).is_ok_and(|metadata| is_executable(&metadata)) {
+                continue;
+            }
+            found.entry(name.to_owned()).or_insert_with(|| entry.path());
+        }
+    }
+    found
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    metadata.is_file()
 }
 
 fn run_parsed(cli: Cli) -> Result<i32> {
@@ -994,7 +1148,7 @@ fn extension_executable(name: &OsStr) -> Result<OsString> {
             name: display.into_owned(),
         });
     }
-    let mut executable = OsString::from("lantai-");
+    let mut executable = OsString::from(EXTENSION_PREFIX);
     executable.push(name);
     Ok(executable)
 }
@@ -1896,6 +2050,58 @@ mod tests {
         assert!(!matches_item(&item, None, Some("Projects/Other")));
     }
 
+    /// The grouped help is hand-written, so nothing may quietly fall out of it.
+    #[test]
+    fn every_built_in_command_appears_in_exactly_one_help_group() {
+        let command = Cli::command();
+        let mut grouped = Vec::new();
+        for (_, names) in COMMAND_GROUPS {
+            grouped.extend(names.iter().copied());
+        }
+        let unique = grouped.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), grouped.len(), "a command is grouped twice");
+
+        let parsed = command
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            parsed, unique,
+            "the grouped help and the parser disagree about the command set"
+        );
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_about().is_some()),
+            "the grouped help reads each description from the parser"
+        );
+    }
+
+    #[test]
+    fn help_is_rendered_only_when_it_will_be_shown() {
+        let arguments = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| OsString::from(*value))
+                .collect::<Vec<_>>()
+        };
+        assert!(wants_help(arguments(&[])));
+        assert!(wants_help(arguments(&["--help"])));
+        assert!(wants_help(arguments(&["-h"])));
+        assert!(wants_help(arguments(&["help"])));
+        assert!(wants_help(arguments(&["--library", "refs.bib", "--help"])));
+        assert!(!wants_help(arguments(&["list"])));
+        assert!(!wants_help(arguments(&["collection", "list"])));
+        // The grouped help hangs off the root, so a subcommand's own help is
+        // clap's to render and must not trigger a PATH scan.
+        assert!(!wants_help(arguments(&["list", "--help"])));
+        // `help` first is the root help; a positional that merely spells
+        // "help" belongs to its subcommand.
+        assert!(!wants_help(arguments(&["show", "help"])));
+        // A value that merely looks like a flag's argument stays a value.
+        assert!(!wants_help(arguments(&["--library", "help", "list"])));
+    }
+
     #[test]
     fn expanding_a_leading_tilde_only_means_this_user() {
         let home = BaseDirs::new().expect("a home directory");
@@ -1911,4 +2117,49 @@ mod tests {
         assert_eq!(expand_home("refs.bib"), PathBuf::from("refs.bib"));
     }
 
+    #[test]
+    fn discovery_skips_built_ins_and_non_executables() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["lantai-check", "lantai-mine", "lantai-notes", "unrelated"] {
+            std::fs::write(directory.path().join(name), "#!/bin/sh\n").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["lantai-check", "lantai-mine"] {
+                std::fs::set_permissions(
+                    directory.path().join(name),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+            // Installing an extension by symlinking it into a PATH directory
+            // is normal, and dispatch follows the link.
+            std::os::unix::fs::symlink(
+                directory.path().join("lantai-mine"),
+                directory.path().join("lantai-linked"),
+            )
+            .unwrap();
+        }
+
+        let builtins = COMMAND_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let found = discover_extensions(Some(directory.path().as_os_str()), &builtins);
+
+        assert!(found.contains_key("mine"));
+        assert!(!found.contains_key("check"), "a built-in always wins");
+        #[cfg(unix)]
+        {
+            assert!(
+                !found.contains_key("notes"),
+                "a non-executable file cannot run"
+            );
+            assert!(
+                found.contains_key("linked"),
+                "a symlinked extension runs, so it must be listed"
+            );
+        }
+    }
 }
