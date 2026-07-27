@@ -4,16 +4,21 @@ set -euo pipefail
 # lantai-about: Pick an attachment and open it
 usage() {
   cat <<'EOF'
-Usage: lantai open [--print] [--] [TERM...]
+Usage: lantai open [--print] [--stdin] [--] [TERM...]
 
 Fuzzy-select one or more attachments with fzf and open them with macOS `open`
 or Linux `xdg-open`. TERMs are the `lantai list` query language; put them
 after `--` if any of them starts with `-`.
 
   --print   write the resolved paths instead of opening them
+  --stdin   read the selection as JSON on standard input instead of picking
 
 Selecting several attachments opens all of them. Selecting none does nothing
 and succeeds.
+
+--stdin takes what either picker writes: an array of items opens every
+attachment they have, and an array of attachment selections opens exactly
+those. It takes no TERMs, because the selection is already made.
 
 Typing matches whole words, against the complete citation key, author list,
 title, and collections even where a row abbreviates them. Prefix a word with
@@ -31,11 +36,16 @@ EOF
 }
 
 print_only=false
+from_stdin=false
 terms=()
 while (($# > 0)); do
   case $1 in
     --print)
       print_only=true
+      shift
+      ;;
+    --stdin)
+      from_stdin=true
       shift
       ;;
     --help|-h)
@@ -69,12 +79,31 @@ if [[ -n ${LANTAI_CONFIG:-} ]]; then
   lantai_args+=(--config "$LANTAI_CONFIG")
 fi
 
-selection=$(
-  "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} pick --attachments -- \
-    ${terms[@]+"${terms[@]}"}
-)
+if $from_stdin; then
+  if ((${#terms[@]} > 0)); then
+    echo "lantai open: --stdin takes no query terms" >&2
+    exit 2
+  fi
+  selection=$(cat)
+else
+  selection=$(
+    "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} pick --attachments -- \
+      ${terms[@]+"${terms[@]}"}
+  )
+fi
 [[ -n $selection ]] || exit 0
+
+# Both pickers describe an attachment, one wrapped in its item and one inside
+# the item's list, so reduce either to the attachments themselves and let the
+# rest of the script speak only of those. One item, as `lantai show` writes it,
+# is the same thing without the array.
+selection=$(printf '%s' "$selection" |
+  jq '(if type == "array" then . else [.] end)
+    | [.[] | if has("attachment") then .attachment else (.attachments[]?) end]')
 if [[ $(printf '%s' "$selection" | jq 'length') -eq 0 ]]; then
+  if $from_stdin; then
+    echo "lantai open: the selection has no attachments." >&2
+  fi
   exit 0
 fi
 
@@ -84,7 +113,7 @@ fi
 # exit status but not the diagnostics, which are the only clue when it fails
 # outright.
 library_directory=
-if printf '%s' "$selection" | jq -e 'any(.[]; .attachment.path | startswith("/") | not)' >/dev/null; then
+if printf '%s' "$selection" | jq -e 'any(.[]; .path | startswith("/") | not)' >/dev/null; then
   report=$("$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} check --json) || true
   if [[ -z $report ]]; then
     echo "lantai open: could not determine the library path" >&2
@@ -125,4 +154,4 @@ while IFS= read -r -d '' attachment_path; do
   else
     open_file "$resolved_path"
   fi
-done < <(printf '%s' "$selection" | jq -j '.[] | .attachment.path, "\u0000"')
+done < <(printf '%s' "$selection" | jq -j '.[] | .path, "\u0000"')

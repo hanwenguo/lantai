@@ -38,16 +38,18 @@ The scripts can also be called directly, such as
 | Command | Purpose | Dependencies |
 | --- | --- | --- |
 | `lantai pick [--id-only] [--attachments] [--] [TERM...]` | Interactively pick items or attachments | `jq`, `fzf` 0.56 or newer |
-| `lantai open [--print] [--] [TERM...]` | Pick an attachment and open it | `lantai pick`, `jq`, `open` or `xdg-open` |
+| `lantai open [--print] [--stdin] [--] [TERM...]` | Pick an attachment and open it | `lantai pick`, `jq`, `open` or `xdg-open` |
 | `lantai batch-collection [--remove] [--all] COLLECTION [--] [TERM...]` | Add or remove many items from a collection | `jq`; `lantai pick` unless `--all` |
+| `lantai dwim [--action ACTION] [--all] [--] [TERM...]` | Pick items, then choose what to do with them | `jq`, `fzf`; `lantai pick` and `lantai open` |
 
 Run any command with `--help` for its complete interface. `TERM...` is the
 [query language](../docs/cli-reference.md#list) the built-in `list` takes, so
 filters are written `collection:Reviewed` rather than `--collection Reviewed`.
 A `--` is only needed when a term starts with `-`, such as a negation.
 
-`open` reaches the picker through `lantai pick`, so a `lantai-pick` earlier on
-`PATH` replaces the one it uses.
+`open` reaches the picker through `lantai pick`, and `dwim` reaches both
+through `lantai pick` and `lantai open`, so a `lantai-pick` or `lantai-open`
+earlier on `PATH` replaces the one they use.
 
 ## Extension process contract
 

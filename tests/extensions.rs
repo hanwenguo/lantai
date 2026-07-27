@@ -14,7 +14,12 @@ use lantai::library::LibraryLayout;
 
 const ITEM_UUID: &str = "cc9e50c4-55ee-4471-b17c-c41684f64bf9";
 const ATTACHMENT_UUID: &str = "5025cd5a-ead6-47c0-bb9e-b5399556af98";
-const EXTENSIONS: &[&str] = &["lantai-pick", "lantai-open", "lantai-batch-collection"];
+const EXTENSIONS: &[&str] = &[
+    "lantai-pick",
+    "lantai-open",
+    "lantai-batch-collection",
+    "lantai-dwim",
+];
 
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
@@ -282,6 +287,30 @@ impl WorkflowFixture {
         self.command().args(arguments).output().unwrap()
     }
 
+    fn run_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
+        let mut child = self
+            .command()
+            .args(["--config"])
+            .arg(&self.config)
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// A directory holding exactly one file, which is what makes the file
+    /// chooser deterministic under the picker stub that takes everything.
+    fn downloads(&self) -> PathBuf {
+        let directory = self._directory.path().join("downloads");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("captured.pdf"), b"%PDF-1.4\n").unwrap();
+        directory
+    }
+
     fn command(&self) -> Command {
         let home = self._directory.path();
         let mut command = Command::new(env!("CARGO_BIN_EXE_lantai"));
@@ -433,6 +462,154 @@ fn official_extensions_execute_the_documented_workflows() {
     assert!(none.status.success());
     assert!(String::from_utf8_lossy(&none.stderr).contains("No matching items"));
 
+    // `dwim` picks once and then acts. Every menu it would open has a flag
+    // that answers it, which is how a script drives the same workflow.
+    let cited = fixture.run(&["dwim", "--all", "--action", "latex", "author:lovelace"]);
+    assert!(
+        cited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cited.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(cited.stdout).unwrap(),
+        "\\cite{rich,missing}\n"
+    );
+    let typst = fixture.run(&["dwim", "--all", "--action", "typst", "author:lovelace"]);
+    assert_eq!(String::from_utf8(typst.stdout).unwrap(), "@rich @missing\n");
+    let plain = fixture.run(&["dwim", "--all", "--action", "keys", "author:lovelace"]);
+    assert_eq!(String::from_utf8(plain.stdout).unwrap(), "rich missing\n");
+    let exported = fixture.run(&["dwim", "--all", "--action", "bibtex", "key:rich"]);
+    assert!(String::from_utf8_lossy(&exported.stdout).contains("@article{rich,"));
+
+    let opened = fixture.run(&["dwim", "--all", "--action", "open", "--print", "key:rich"]);
+    assert!(
+        opened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(opened.stdout).unwrap(),
+        format!("{}\n", expected_path.display())
+    );
+
+    // That action is `open --stdin`, which takes either picker's output; here
+    // it is the item picker's, as `dwim` hands it over.
+    let selection = fixture.run(&["pick", "key:rich"]).stdout;
+    let piped = fixture.run_with_stdin(&["open", "--stdin", "--print"], &selection);
+    assert!(
+        piped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&piped.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(piped.stdout).unwrap(),
+        format!("{}\n", expected_path.display())
+    );
+    let both = fixture.run_with_stdin(&["open", "--stdin", "key:rich"], &selection);
+    assert_eq!(both.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&both.stderr).contains("no query terms"));
+
+    let filed = fixture.run(&[
+        "dwim",
+        "--all",
+        "--action",
+        "collection-add",
+        "--collection",
+        "Dwim",
+        "key:rich",
+    ]);
+    assert!(
+        filed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&filed.stderr)
+    );
+    assert!(
+        fixture
+            .show("rich")
+            .collections
+            .contains(&"Dwim".to_owned())
+    );
+    let unfiled = fixture.run(&[
+        "dwim",
+        "--all",
+        "--action",
+        "collection-remove",
+        "--collection",
+        "Dwim",
+        "key:rich",
+    ]);
+    assert!(
+        unfiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unfiled.stderr)
+    );
+    assert!(
+        !fixture
+            .show("rich")
+            .collections
+            .contains(&"Dwim".to_owned())
+    );
+
+    let refused = fixture.run(&[
+        "dwim",
+        "--all",
+        "--action",
+        "collection-add",
+        "--collection",
+        "blocked",
+        "author:lovelace",
+    ]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("no UUID"));
+    let unknown = fixture.run(&["dwim", "--all", "--action", "nonsense", "key:rich"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown action"));
+
+    // Attaching addresses one item, and offers the files in the source
+    // directory newest first; the stub takes the first of them.
+    let downloads = fixture.downloads();
+    let attached = fixture.run(&[
+        "dwim",
+        "--all",
+        "--action",
+        "attach",
+        "--from",
+        downloads.to_str().unwrap(),
+        "key:rich",
+    ]);
+    assert!(
+        attached.status.success(),
+        "{}",
+        String::from_utf8_lossy(&attached.stderr)
+    );
+    assert!(
+        fixture
+            .show("rich")
+            .attachments
+            .iter()
+            .any(|attachment| attachment.title.as_deref() == Some("captured.pdf"))
+    );
+    let ambiguous = fixture.run(&[
+        "dwim",
+        "--all",
+        "--action",
+        "attach",
+        "--from",
+        downloads.to_str().unwrap(),
+        "--",
+        "-key:missing",
+    ]);
+    assert_eq!(ambiguous.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("exactly one item"));
+
+    let discarded = fixture.run(&["dwim", "--all", "--action", "remove", "--yes", "key:other"]);
+    assert!(
+        discarded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&discarded.stderr)
+    );
+    assert!(keys(&fixture.run(&["list", "key:other"])).is_empty());
+
     // Cancelling the picker is not a failure, and nothing downstream of it runs.
     write_executable(
         &fixture.tools.join("fzf"),
@@ -442,6 +619,10 @@ fn official_extensions_execute_the_documented_workflows() {
         ["pick"].as_slice(),
         ["open"].as_slice(),
         ["batch-collection", "Cancelled"].as_slice(),
+        // Once for the picker, and once for the action menu the picker's
+        // result would have led to.
+        ["dwim", "--action", "keys"].as_slice(),
+        ["dwim", "--all", "key:rich"].as_slice(),
     ] {
         let cancelled = fixture.run(command);
         assert!(
@@ -474,6 +655,7 @@ fn official_extensions_run_without_a_configuration_override() {
         ["pick", "--id-only"].as_slice(),
         ["open", "--print"].as_slice(),
         ["batch-collection", "--all", "Reviewed", "key:rich"].as_slice(),
+        ["dwim", "--all", "--action", "keys", "key:rich"].as_slice(),
     ] {
         let output = fixture.run_without_config(command);
         assert!(

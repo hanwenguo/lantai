@@ -364,8 +364,8 @@ omits that section entirely when nothing is installed. Each command is listed
 with the one-line description it declares in a `# lantai-about:` comment;
 Lantai reads that line from the file and never runs the executable to obtain
 it. See the [extension guide](../extension/README.md) for the environment
-contract, the description convention, and the three shipped commands: `pick`,
-`open`, and `batch-collection`.
+contract, the description convention, and the four shipped commands: `pick`,
+`open`, `batch-collection`, and `dwim`.
 
 Use `lantai COMMAND --help` as the executable source of truth for command-line
 spelling.

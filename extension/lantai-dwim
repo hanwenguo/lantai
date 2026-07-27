@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# lantai-about: Pick items, then choose what to do with them
+usage() {
+  cat <<'EOF'
+Usage: lantai dwim [--action ACTION] [--collection NAME] [--file PATH]
+                   [--from DIR] [--all] [--yes] [--print] [--] [TERM...]
+
+Pick items with the `lantai pick` picker, then choose what to do with the
+selection. TERMs are the `lantai list` query language; put them after `--` if
+any of them starts with `-`.
+
+  --action ACTION     skip the menu and run ACTION
+  --collection NAME   skip the collection chooser
+  --file PATH         skip the file chooser and attach PATH
+  --from DIR          take attachment candidates from DIR instead of ~/Downloads
+  --all               skip the picker and act on every matching item
+  --yes               do not ask before removing items
+  --print             with the open action, write the paths instead of opening
+
+Actions:
+  bibtex              write the BibLaTeX of the selection
+  latex               write \cite{key,...}
+  typst               write @key references
+  keys                write the citation keys
+  open                open every attachment of the selection
+  collection-add      put the items into a collection
+  collection-remove   take the items out of a collection
+  attach              attach a file to the one selected item
+  remove              remove the items from the library
+
+The collection chooser lists the collections already in the library; typing a
+name that is not there chooses that name instead, which creates it. Attaching
+offers the files directly inside the source directory, newest first.
+
+Selecting nothing does nothing and succeeds, and so does cancelling any menu.
+A change is refused before it starts if a selected record has no UUID.
+EOF
+}
+
+action=
+collection=
+attach_file=
+source_directory=${HOME:-.}/Downloads
+act_on_all=false
+assume_yes=false
+print_only=false
+terms=()
+while (($# > 0)); do
+  case $1 in
+    --action | --collection | --file | --from)
+      (($# >= 2)) || {
+        echo "lantai dwim: $1 needs a value" >&2
+        exit 2
+      }
+      case $1 in
+        --action) action=$2 ;;
+        --collection) collection=$2 ;;
+        --file) attach_file=$2 ;;
+        --from) source_directory=$2 ;;
+      esac
+      shift 2
+      ;;
+    --all)
+      act_on_all=true
+      shift
+      ;;
+    --yes)
+      assume_yes=true
+      shift
+      ;;
+    --print)
+      print_only=true
+      shift
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      terms=("$@")
+      break
+      ;;
+    -*)
+      # This command owns enough flags that reading a mistyped one as a query
+      # term would be a silent surprise. A term really starting with `-`, such
+      # as a negation, follows `--` as it does everywhere else.
+      usage >&2
+      exit 2
+      ;;
+    *)
+      terms=("$@")
+      break
+      ;;
+  esac
+done
+
+ACTIONS='bibtex latex typst keys open collection-add collection-remove attach remove'
+if [[ -n $action ]]; then
+  case " $ACTIONS " in
+    *" $action "*) ;;
+    *)
+      echo "lantai dwim: unknown action '$action'; one of: $ACTIONS" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+command -v jq >/dev/null 2>&1 || {
+  echo "lantai dwim: jq is required" >&2
+  exit 127
+}
+# fzf is only needed for a step that actually opens a menu, so a fully
+# flag-driven run works without it.
+need_fzf() {
+  command -v fzf >/dev/null 2>&1 || {
+    echo "lantai dwim: fzf is required" >&2
+    exit 127
+  }
+}
+
+export LANTAI="${LANTAI:-lantai}"
+# `lantai` only exports LANTAI_CONFIG when --config was passed, and bash 3.2
+# treats an empty array as unset under `set -u`, hence the guarded expansions.
+lantai_args=()
+if [[ -n ${LANTAI_CONFIG:-} ]]; then
+  lantai_args+=(--config "$LANTAI_CONFIG")
+fi
+
+# `command` is what keeps this from calling itself: a directly executed
+# extension leaves LANTAI as the bare name `lantai`, which bash would otherwise
+# resolve to this very function rather than to the executable on PATH.
+lantai() {
+  command "$LANTAI" ${lantai_args[@]+"${lantai_args[@]}"} "$@"
+}
+
+selection_file=$(mktemp "${TMPDIR:-/tmp}/lantai-dwim.XXXXXX")
+trap 'rm -f "$selection_file"' EXIT
+
+# Whole items rather than identifiers, so the UUID check below can tell an
+# entry with no UUID from one falling back to its key.
+if $act_on_all; then
+  lantai list -- ${terms[@]+"${terms[@]}"} >"$selection_file"
+else
+  lantai pick -- ${terms[@]+"${terms[@]}"} >"$selection_file"
+fi
+
+if [[ ! -s $selection_file ]]; then
+  echo "Nothing selected." >&2
+  exit 0
+fi
+count=$(jq 'length' "$selection_file")
+if ((count == 0)); then
+  echo "No matching items." >&2
+  exit 0
+fi
+
+# Rows are `token<TAB>label` and only the label is shown, the way the picker
+# hides its own bookkeeping columns. Nothing is written when the menu is
+# cancelled; an fzf failure propagates out of the substitution the caller runs
+# this in.
+menu() {
+  local prompt=$1
+  shift
+  local status=0 chosen
+  need_fzf
+  chosen=$(printf '%s\n' "$@" |
+    fzf --no-multi --delimiter=$'\t' --with-nth=2.. --prompt="$prompt") || status=$?
+  case $status in
+    0) ;;
+    1 | 130) return 0 ;;
+    *) exit "$status" ;;
+  esac
+  printf '%s\n' "$chosen" | head -n 1 | cut -f1
+}
+
+if [[ -z $action ]]; then
+  rows=(
+    $'bibtex\twrite the BibLaTeX of the selection'
+    $'latex\twrite \\cite{key,...}'
+    $'typst\twrite @key references'
+    $'keys\twrite the citation keys'
+    $'open\topen every attachment'
+    $'collection-add\tput into a collection'
+    $'collection-remove\ttake out of a collection'
+  )
+  # Attaching addresses one item, so it is only on offer when one is selected.
+  if ((count == 1)); then
+    rows+=($'attach\tattach a file from the source directory')
+  fi
+  rows+=($'remove\tremove from the library')
+  action=$(menu "$count item(s)> " "${rows[@]}")
+  [[ -n $action ]] || exit 0
+fi
+
+require_uuids() {
+  if jq -e 'any(.[]; .uuid == null)' "$selection_file" >/dev/null; then
+    echo "lantai dwim: refusing to change an item with no UUID; run lantai format first" >&2
+    exit 2
+  fi
+}
+
+# The library's collections, plus whatever the selection is already filed
+# under, offered for a name to add to; only the selection's own collections are
+# worth offering to remove from.
+choose_collection() {
+  local prompt=$1 status=0 output query chosen
+  need_fzf
+  shift
+  # --print-query writes the typed text as the first line, so a collection that
+  # does not exist yet is chosen by typing it.
+  output=$(printf '%s\n' "$@" | fzf --no-multi --print-query --prompt="$prompt") || status=$?
+  case $status in
+    0 | 1) ;;
+    130) return 0 ;;
+    *) exit "$status" ;;
+  esac
+  query=$(printf '%s' "$output" | head -n 1)
+  chosen=$(printf '%s' "$output" | tail -n +2 | head -n 1)
+  if [[ -n $chosen ]]; then
+    printf '%s\n' "$chosen"
+  else
+    printf '%s\n' "$query"
+  fi
+}
+
+collection_names() {
+  if [[ $1 == add ]]; then
+    {
+      lantai collection list --format json | jq -r '.[]'
+      jq -r '.[].collections[]?' "$selection_file"
+    } | sort -u
+  else
+    jq -r '.[].collections[]?' "$selection_file" | sort -u
+  fi
+}
+
+change_collection() {
+  local change=$1 name=$2 uuid
+  while IFS= read -r -d '' uuid; do
+    lantai collection "$change" "$uuid" "$name" --json >/dev/null
+  done < <(jq -j '.[] | .uuid, "\u0000"' "$selection_file")
+}
+
+# One line per style, from the citation keys the selection carries.
+cite() {
+  jq -r "[.[].citation_key] | $1" "$selection_file"
+}
+
+case $action in
+  bibtex)
+    ids=()
+    while IFS= read -r -d '' id; do
+      ids+=("$id")
+    done < <(jq -j '.[] | (.uuid // .citation_key), "\u0000"' "$selection_file")
+    lantai export ${ids[@]+"${ids[@]}"}
+    ;;
+  latex)
+    cite '"\\cite{" + join(",") + "}"'
+    ;;
+  typst)
+    cite 'map("@" + .) | join(" ")'
+    ;;
+  keys)
+    cite 'join(" ")'
+    ;;
+  open)
+    # `lantai open` resolves managed paths and knows the platform opener, and
+    # its stdin mode takes exactly what the picker wrote here.
+    open_args=(--stdin)
+    if $print_only; then
+      open_args+=(--print)
+    fi
+    lantai open "${open_args[@]}" <"$selection_file"
+    ;;
+  collection-add | collection-remove)
+    require_uuids
+    change=${action#collection-}
+    if [[ -z $collection ]]; then
+      names=()
+      while IFS= read -r name; do
+        # An `if` rather than `&&`: a false test as the last command of the
+        # body would make the loop itself fail under `set -e`.
+        if [[ -n $name ]]; then
+          names+=("$name")
+        fi
+      done < <(collection_names "$change")
+      if [[ $change == remove ]] && ((${#names[@]} == 0)); then
+        echo "lantai dwim: the selection is filed nowhere." >&2
+        exit 0
+      fi
+      collection=$(choose_collection 'Collection> ' ${names[@]+"${names[@]}"})
+      [[ -n $collection ]] || exit 0
+    fi
+    change_collection "$change" "$collection"
+    if [[ $change == add ]]; then
+      printf "Added %d item(s) to '%s'.\n" "$count" "$collection"
+    else
+      printf "Removed %d item(s) from '%s'.\n" "$count" "$collection"
+    fi
+    ;;
+  attach)
+    require_uuids
+    if ((count != 1)); then
+      echo "lantai dwim: attach needs exactly one item; $count selected" >&2
+      exit 2
+    fi
+    file=$attach_file
+    if [[ -z $file ]]; then
+      [[ -d $source_directory ]] || {
+        echo "lantai dwim: $source_directory is not a directory" >&2
+        exit 2
+      }
+      # Newest first, which is what makes a just-downloaded file the obvious
+      # choice. BSD and GNU stat spell the same request differently.
+      if stat -f '%m %N' "$source_directory" >/dev/null 2>&1; then
+        stat_args=(-f '%m %N')
+      else
+        stat_args=(-c '%Y %n')
+      fi
+      files=()
+      while IFS= read -r path; do
+        # A name holding a tab or a newline cannot survive this listing, so it
+        # is left out rather than offered as something else.
+        [[ -f $path && $path != *$'\t'* ]] || continue
+        files+=("$path"$'\t'"$(basename -- "$path")")
+      done < <(find "$source_directory" -maxdepth 1 -type f ! -name '.*' \
+        -exec stat "${stat_args[@]}" {} + 2>/dev/null | sort -rn | cut -d' ' -f2-)
+      if ((${#files[@]} == 0)); then
+        echo "lantai dwim: no files in $source_directory" >&2
+        exit 0
+      fi
+      file=$(menu 'File> ' "${files[@]}")
+      [[ -n $file ]] || exit 0
+    fi
+    uuid=$(jq -r '.[0].uuid' "$selection_file")
+    # The built-in infers the title and the media type from the file itself.
+    lantai attach "$uuid" "$file" --json |
+      jq -r '"Attached " + .title + " to " + .citation_key + "."'
+    ;;
+  remove)
+    require_uuids
+    if ! $assume_yes; then
+      # The safe answer is first, so it is the one already highlighted.
+      answer=$(menu 'Remove> ' \
+        "$(printf 'no\tkeep the %d item(s)' "$count")" \
+        "$(printf 'yes\tremove %d item(s), managed files to trash' "$count")")
+      [[ $answer == yes ]] || exit 0
+    fi
+    while IFS= read -r -d '' uuid; do
+      lantai remove "$uuid" --json >/dev/null
+    done < <(jq -j '.[] | .uuid, "\u0000"' "$selection_file")
+    printf 'Removed %d item(s).\n' "$count"
+    ;;
+esac

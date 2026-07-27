@@ -134,6 +134,16 @@ done
 Paths are always passed as a single quoted argument; managed filenames are also
 sanitized by Lantai.
 
+`--stdin` skips the picker and reads a selection that has already been made,
+which is how `dwim` opens what it picked. It takes what either picker writes —
+an array of items opens every attachment they have, an array of attachment
+selections opens exactly those — and one item on its own, as `show` writes it:
+
+```sh
+lantai pick collection:Reviewed | lantai open --stdin
+lantai show VS23 | lantai open --stdin --print
+```
+
 ## Change collection membership in bulk
 
 `batch-collection` narrows the library with query terms, offers the matches in
@@ -154,6 +164,46 @@ The change is refused before any mutation if a selected record lacks a UUID.
 Otherwise items are changed sequentially by UUID and processing stops at the
 first failure. These are separate locked Lantai mutations, not one atomic
 batch.
+
+## Pick once, then choose what to do
+
+`dwim` is the same picker followed by a menu, for the times when the operation
+is easier to recognize than to remember:
+
+```sh
+lantai dwim attention
+```
+
+`TAB` selects as usual, and what the menu then offers applies to everything
+selected: the BibLaTeX of the selection, a `\cite{key,...}` line for LaTeX,
+`@key` references for Typst, the bare citation keys, opening every attachment,
+putting the items into a collection or taking them out of one, and removing
+them. Attaching a file is offered as well when exactly one item is selected.
+
+The collection chooser lists the collections that already exist; typing a name
+that is not among them chooses that name, which creates it. Attaching lists the
+files directly inside `~/Downloads`, newest first, and lets Lantai infer the
+title and the media type. Removing asks first, with the safe answer selected.
+
+Each menu has a flag that answers it, so the same workflow scripts:
+
+```sh
+lantai dwim --all --action latex collection:Reviewed year:2024
+lantai dwim --all --action collection-add --collection Reviewed key:VS23
+lantai dwim --all --action attach --file ~/Downloads/paper.pdf key:VS23
+lantai dwim --all --action remove --yes key:draft
+```
+
+`--all` skips the picker and acts on every match, `--action` skips the menu,
+`--collection` and `--file` skip their choosers, `--from` looks for files
+somewhere other than `~/Downloads`, `--yes` skips the removal confirmation, and
+`--print` writes the paths the open action would have opened.
+Text goes to standard output, so `\cite{...}` reaches the clipboard the usual
+way — `lantai dwim --action latex | pbcopy`.
+
+Cancelling any menu does nothing and succeeds, and a change is refused before
+it starts if a selected record has no UUID. Mutations are separate locked
+Lantai operations, not one atomic batch, exactly as in `batch-collection`.
 
 ## Adapt the workflows
 
