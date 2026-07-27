@@ -47,7 +47,7 @@ One library with collections is supported. A collection is a name stored in BibL
 - Assign a UUID to an unmanaged entry on its next Lantai mutation or an
   explicit import/format operation; merely reading an externally added entry
   does not rewrite the file.
-- Generate new keys as normalized ASCII `AuthorYearTitle`, for example `lovelace1843sketch`; use `anon`, `nd`, and `item` fallbacks and append `a`, `b`, etc. on collision. Never regenerate a key after creation.
+- Generate new keys as normalized ASCII labels in the Bib(La)TeX alphabetic style, for example `Lov43`, `GJ79`, and `ABC-95`, writing the et-al marker as `-` because an entry key admits no `+`; fall back to the first significant title word and then `Anon`, omit an unknown year, and append `a`, `b`, etc. on collision. Never regenerate a key after creation.
 - Preserve source entry order and append new entries. Canonicalize entry syntax, indentation, managed field names/order, creator syntax, dates, identifiers, collections, and attachment references.
 - Normalize most bibliographic fields after external edits. Preserve exact raw value expressions for `abstract`, `annotation`, `note`, and unknown/custom fields. Preserve comments, `@string`, and `@preamble` blocks in source order.
 - An explicit CLI/REST update to a raw field replaces its expression; unrelated writes retain it exactly.

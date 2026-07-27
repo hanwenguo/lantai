@@ -1547,7 +1547,7 @@ mod tests {
 
         let source = state.inner.layout.read_utf8().unwrap();
         let catalog = Catalog::parse(&state.inner.layout.bibliography, &source).unwrap();
-        let item = catalog.find("lovelace1843sketch").unwrap();
+        let item = catalog.find("Lov43").unwrap();
         // The translator's automatic keyword is dropped; only what the user
         // typed in the popup becomes a collection.
         assert_eq!(item.collections, vec!["manual"]);

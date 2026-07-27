@@ -19,7 +19,7 @@ Use `--format human` when reading the legacy built-in displays directly:
 
 ```sh
 lantai list --format human
-lantai show vaswani2023attention --format human
+lantai show VS23 --format human
 lantai collection list --format human
 ```
 

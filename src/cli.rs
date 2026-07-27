@@ -123,7 +123,7 @@ enum Command {
         #[arg(long = "field", value_name = "NAME=VALUE", conflicts_with = "from")]
         fields: Vec<String>,
 
-        /// Use this citation key instead of generating AuthorYearTitle.
+        /// Use this citation key instead of generating an alphabetic one.
         #[arg(long, conflicts_with = "from")]
         key: Option<String>,
 
@@ -1669,7 +1669,7 @@ fn run_import(backend: &mut Backend, import: RdfImport) -> Result<ImportSummary>
 
 /// Zotero citation keys are reused, but they are not authoritative here: an
 /// existing entry already owning the key, or a key Lantai rejects, falls back
-/// to the generated AuthorYearTitle form.
+/// to the generated alphabetic form.
 fn add_item(backend: &mut Backend, item: NewItem) -> Result<AddedItem> {
     if item.citation_key.is_none() {
         return backend.add(item);

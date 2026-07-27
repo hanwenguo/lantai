@@ -24,18 +24,28 @@ edits are retried a bounded number of times rather than silently overwritten.
 Each managed entry stores a stable UUID in the BibLaTeX `lantaiid` field:
 
 ```bibtex
-@article{lovelace1843sketch,
+@article{Lov43,
   title = {A Sketch of the Analytical Engine},
   lantaiid = {02ca5bd8-c86a-40e1-859e-f85cba6264a8}
 }
 ```
 
 The UUID is the safest identifier for scripts and mutations. The citation key
-is the editable name after the entry type (`lovelace1843sketch` above). A key
-can identify an item only when it is unambiguous.
+is the editable name after the entry type (`Lov43` above). A key can identify
+an item only when it is unambiguous.
 
-New items receive an ASCII `AuthorYearTitle` key. Missing components use
-`anon`, `nd`, and `item`; collisions receive `a`, `b`, and later suffixes.
+New items receive an ASCII key in the Bib(La)TeX alphabetic style: the label
+those styles print, without its brackets. One author contributes the first three
+letters of the family name and two to four authors contribute one initial each,
+followed by the final two digits of the year — `Lov43`, `GJ79`. Five or more
+authors, or a trailing `and others`, keep three initials and an et-al marker
+(`ABC-95`), particles stay lowercase (`vdB19`), and an organization in braces
+counts as one name (`ISO16`). Those styles print the marker as `+`, which an
+entry key cannot hold, so Lantai writes `-`. Names are abbreviated by the tokens
+the source wrote, so `张伟` counts once and becomes `Zha`. An item with no author
+uses its first significant title word (`Unc19`), an item with neither becomes
+`Anon`, and an unknown date contributes nothing. Collisions receive `a`, `b`,
+and later suffixes, as the alphabetic styles disambiguate identical labels.
 Lantai never automatically regenerates an existing key. Rename one explicitly:
 
 ```sh
@@ -55,7 +65,7 @@ shape:
 ```json
 {
   "uuid": "f450ca71-aa2a-49a1-91d3-2818f42f0903",
-  "citation_key": "vaswani2023attention",
+  "citation_key": "VS23",
   "entry_type": "online",
   "title": "Attention Is All You Need",
   "fields": [

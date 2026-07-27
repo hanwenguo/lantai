@@ -206,7 +206,7 @@ Each Zotero item becomes one entry, using the same item-type and field mapping
 as the Connector. A nested Zotero collection becomes one `/`-joined name such as
 `Projects/Engines`; a comma in a collection name becomes a space, because
 `keywords` separates values with commas. `<z:citationKey>` values are reused,
-falling back to a generated `AuthorYearTitle` key when the key is already taken
+falling back to a generated alphabetic-style key when the key is already taken
 or Lantai rejects it. **Zotero's own tags are not imported**, and neither are
 its notes. Zotero writes `dc:date` in its application locale, so dates are
 converted to ISO 8601, narrowing to the year alone when the month cannot be

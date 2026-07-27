@@ -2428,7 +2428,7 @@ mod tests {
         let added = LibraryStore::new(layout).add_item(new_article()).unwrap();
         let output = fs::read_to_string(bibliography).unwrap();
 
-        assert_eq!(added.citation_key, "lovelace1843sketch");
+        assert_eq!(added.citation_key, "Lov43");
         assert!(output.contains("% retained comment"));
         assert!(output.contains("abstract = \"raw \" # suffix"));
         assert!(output.contains(&format!("lantaiid = {{{}}}", added.uuid)));
@@ -2442,17 +2442,14 @@ mod tests {
         layout.initialize().unwrap();
         let store = LibraryStore::new(layout);
 
+        assert_eq!(store.add_item(new_article()).unwrap().citation_key, "Lov43");
         assert_eq!(
             store.add_item(new_article()).unwrap().citation_key,
-            "lovelace1843sketch"
-        );
-        assert_eq!(
-            store.add_item(new_article()).unwrap().citation_key,
-            "lovelace1843sketcha"
+            "Lov43a"
         );
 
         let mut duplicate = new_article();
-        duplicate.citation_key = Some("lovelace1843sketch".to_owned());
+        duplicate.citation_key = Some("Lov43".to_owned());
         assert!(matches!(
             store.add_item(duplicate),
             Err(Error::DuplicateCitationKey { .. })

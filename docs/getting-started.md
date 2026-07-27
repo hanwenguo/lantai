@@ -75,11 +75,11 @@ lantai add --type article \
   --field 'title=A Sketch of the Analytical Engine'
 
 lantai list
-lantai show lovelace1843sketch
-lantai collection add lovelace1843sketch History/Computing
+lantai show Lov43
+lantai collection add Lov43 History/Computing
 lantai collection list
-lantai attach lovelace1843sketch ./paper.pdf --mime application/pdf
-lantai export lovelace1843sketch --output selected.bib
+lantai attach Lov43 ./paper.pdf --mime application/pdf
+lantai export Lov43 --output selected.bib
 ```
 
 `lantai --help` groups the commands by what they are for and lists any custom

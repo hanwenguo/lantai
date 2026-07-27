@@ -49,7 +49,7 @@ environment, so configure only trusted executables.
   "items": [
     {
       "uuid": "02ca5bd8-c86a-40e1-859e-f85cba6264a8",
-      "citation_key": "lovelace1843sketch",
+      "citation_key": "Lov43",
       "entry_type": "article",
       "title": "A Sketch of the Analytical Engine",
       "fields": [],
@@ -134,7 +134,8 @@ hook that calls the REST API directly must implement its own recursion guard.
 
 ## Complete citation-key hook in Python
 
-This example changes keys for newly created or imported items to:
+This example replaces the alphabetic key of a newly created or imported item
+with:
 
 ```text
 <first-author-family><four-digit-year><first-title-word>

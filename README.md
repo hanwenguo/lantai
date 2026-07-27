@@ -52,8 +52,8 @@ lantai add --type article \
   --field 'title=A Sketch of the Analytical Engine'
 
 lantai list
-lantai show lovelace1843sketch
-lantai attach lovelace1843sketch ./paper.pdf --mime application/pdf
+lantai show Lov43
+lantai attach Lov43 ./paper.pdf --mime application/pdf
 lantai check
 ```
 
