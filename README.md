@@ -1,11 +1,14 @@
 # Lantai
 
-Lantai (兰台, “orchid platform”) is a small, headless reference manager whose
-library is a human-editable BibLaTeX file. It accepts captures from the
-unmodified Zotero browser Connector and provides a CLI and authenticated local
-REST API for managing bibliography entries and attachments.
+Lantai is a small, headless reference manager whose library is a human-editable
+BibLaTeX file. It accepts captures from the unmodified Zotero browser Connector
+and provides a CLI and authenticated local REST API for managing bibliography
+entries and attachments.
 
-Lantai 0.5.0 supports:
+About the name: 兰台 (lán tái, orchid platform) is the name of the Royal
+Library/Imperial Archives of the Han Dynasty of ancient China.
+
+Lantai supports:
 
 - source-aware BibLaTeX CRUD, validation, canonical formatting, and export;
 - a term-based query language with sorting, shared by the CLI and the REST API;
