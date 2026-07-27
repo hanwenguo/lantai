@@ -37,6 +37,11 @@ Run checks in proportion to the change:
 
 Do not claim a stronger verification level than was actually run.
 
+GitHub Actions repeats the complete Rust checks on Linux and macOS for pushes to
+`main` and for pull requests, and type-checks against the `rust-version` in
+`Cargo.toml`. CI is a backstop, not a substitute for running the checks locally
+before committing.
+
 ## Commits
 
 - Create a commit when the user explicitly asks for one, when completing an
@@ -79,3 +84,7 @@ Do not claim a stronger verification level than was actually run.
 - Use a final release commit subject such as `release: 0.2.0` when a commit only
   prepares a release. Create the matching annotated `v0.2.0` tag only after the
   release commit passes all checks and only when tagging was requested.
+- Pushing a `vX.Y.Z` tag is a publishing action: the release workflow verifies
+  that the tag matches `Cargo.toml`, re-runs the checks, and publishes Linux and
+  macOS binaries as a public GitHub release. Push a tag only when the user asks
+  for that release.

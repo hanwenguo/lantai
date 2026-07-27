@@ -114,4 +114,11 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
+GitHub Actions runs the same three checks on Linux and macOS for every push to
+`main` and every pull request, and separately type-checks the crate against
+the minimum supported Rust version declared in `Cargo.toml`. Pushing a `vX.Y.Z`
+tag whose version matches `Cargo.toml` repeats those checks, then builds
+`x86_64` and `aarch64` binaries for Linux and macOS and publishes them, with
+SHA-256 checksums, as a GitHub release.
+
 The repository-wide contribution and release rules are in `AGENTS.md`.
