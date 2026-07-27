@@ -114,8 +114,9 @@ externally added entry must have a stable mutation identifier.
 
 ## Open an attachment
 
-`open` picks attachments rather than items, resolves managed relative paths
-against the bibliography directory, and hands them to the platform opener:
+`open` is the same picker over attachments rather than items — the same
+columns, keys, and matching — which then resolves managed relative paths
+against the bibliography directory and hands them to the platform opener:
 
 ```sh
 lantai open collection:Reviewed

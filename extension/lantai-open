@@ -6,14 +6,27 @@ usage() {
   cat <<'EOF'
 Usage: lantai open [--print] [--] [TERM...]
 
-Pick attachments with `lantai pick --attachments` and open them with macOS
-`open` or Linux `xdg-open`. TERMs are the `lantai list` query language; put
-them after `--` if any of them starts with `-`.
+Fuzzy-select one or more attachments with fzf and open them with macOS `open`
+or Linux `xdg-open`. TERMs are the `lantai list` query language; put them
+after `--` if any of them starts with `-`.
 
   --print   write the resolved paths instead of opening them
 
 Selecting several attachments opens all of them. Selecting none does nothing
 and succeeds.
+
+Typing matches whole words, against the complete citation key, author list,
+title, and collections even where a row abbreviates them. Prefix a word with
+' for a loose fuzzy match instead.
+
+Inside the picker:
+  TAB / shift-TAB           add or remove a selection
+  alt-a alt-k alt-u alt-t   match against everything / key / author / title
+  alt-y alt-e alt-l alt-r   sort by year / key / title / bibliography order
+  alt-c                     narrow to one collection, or back to all of them
+
+This is `lantai pick --attachments` with the opening step attached, so the
+picker behaves identically.
 EOF
 }
 

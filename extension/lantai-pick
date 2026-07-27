@@ -105,59 +105,8 @@ def under($filter): ($filter | segments) as $want
     else any(.collections[]?; segments as $have
       | ($have | length) >= ($want | length) and $have[0:($want | length)] == $want)
     end;
-EOF
-)
-
-# Rows carry their index into the cache, so re-sorting or narrowing the display
-# never disturbs the preview or the final output. Displayed columns are padded
-# to a fixed width here rather than left to the terminal's tab stops, which is
-# what keeps them lined up.
-if $attachments; then
-  {
-    printf '%s\n' "$common"
-    cat <<'EOF'
-($collection | rtrimstr("\n")) as $only
-| to_entries
-| map(select(.value | under($only)))
-| .[] as $entry
-| $entry.value.attachments
-| to_entries[]
-| [
-    ($entry.key | tostring),
-    (.key | tostring),
-    ($entry.value.uuid // $entry.value.citation_key),
-    ($entry.value.title | fit(width("LANTAI_PICK_W_TITLE"))),
-    ((.value.title // "") | fit(width("LANTAI_PICK_W_ATTACHMENT"))),
-    (.value.media_type | fit(width("LANTAI_PICK_W_MEDIA"))),
-    ($entry.value.citation_key | clean),
-    (.value.path | clean)
-  ]
-| @tsv
-EOF
-  } >"$rows"
-  cat >"$preview" <<'EOF'
-def clean: (. // "") | tostring;
-def dim: "\u001b[2m" + . + "\u001b[0m";
-def bold: "\u001b[1m" + . + "\u001b[0m";
-def caption($name): ($name + ((" " * (12 - ($name | length))) // "")) | dim;
-.[$item] as $item
-| $item.attachments[$attachment] as $file
-| ($item.title // $item.citation_key | bold),
-  "",
-  (caption("item") + " " + $item.citation_key),
-  (caption("attachment") + " " + ($file.title // "—")),
-  (caption("type") + " " + $file.media_type),
-  (caption("path") + " " + $file.path),
-  (if $file.uuid == null
-   then caption("managed") + " no — the file is referenced where it lies"
-   else empty end)
-EOF
-else
-  {
-    printf '%s\n' "$common"
-    # Keep the year rule in step with `year_of` in src/query.rs.
-    cat <<'EOF'
 def field($name): (first(.fields[]? | select(.name | ascii_downcase == $name) | .value)) // "";
+# Keep the year rule in step with `year_of` in src/query.rs.
 def year: [field("year"), field("date")]
   | map(capture("^\\s*(?<digits>[0-9]+)").digits)
   | (.[0] // "");
@@ -191,14 +140,72 @@ def people($width): field("author")
         | ($all[0:.] | map(short_name) | join("; ")) + "; et al."]
      | map(select(length <= $width)) | first)
     // ($all[0:1] | map(short_name) | join("; "));
-($sort | rtrimstr("\n")) as $order
-| ($collection | rtrimstr("\n")) as $only
-| to_entries
-| map(select(.value | under($only)))
-| (if $order == "year" then sort_by(.value | year | (tonumber? // 999999))
-   elif $order == "key" then sort_by(.value.citation_key | ascii_downcase)
-   elif $order == "title" then sort_by(.value.title // "" | ascii_downcase)
-   else . end)
+# Both modes narrow and order by the same item properties, so a row means the
+# same thing whichever picker produced it.
+def arrange($order; $only):
+  to_entries
+  | map(select(.value | under($only)))
+  | if $order == "year" then sort_by(.value | year | (tonumber? // 999999))
+    elif $order == "key" then sort_by(.value.citation_key | ascii_downcase)
+    elif $order == "title" then sort_by(.value.title // "" | ascii_downcase)
+    else . end;
+EOF
+)
+
+# Rows carry their index into the cache, so re-sorting or narrowing the display
+# never disturbs the preview or the final output. Displayed columns are padded
+# to a fixed width here rather than left to the terminal's tab stops, which is
+# what keeps them lined up.
+if $attachments; then
+  {
+    printf '%s\n' "$common"
+    cat <<'EOF'
+arrange($sort | rtrimstr("\n"); $collection | rtrimstr("\n"))
+| .[] as $entry
+| $entry.value as $item
+| width("LANTAI_PICK_W_PEOPLE") as $people
+| $entry.value.attachments
+| to_entries[]
+| [
+    ($entry.key | tostring),
+    (.key | tostring),
+    ($item.uuid // $item.citation_key),
+    ($item | year | fit(4)),
+    ($item | people($people) | fit($people)),
+    ($item.title | fit(width("LANTAI_PICK_W_TITLE"))),
+    ((.value.title // "") | fit(width("LANTAI_PICK_W_ATTACHMENT"))),
+    (.value.media_type | fit(width("LANTAI_PICK_W_MEDIA"))),
+    ($item.citation_key | clean),
+    ($item | field("author") | clean),
+    ($item.title | clean),
+    (($item.collections // []) | join("; ") | clean),
+    (.value.path | clean)
+  ]
+| @tsv
+EOF
+  } >"$rows"
+  cat >"$preview" <<'EOF'
+def clean: (. // "") | tostring;
+def dim: "\u001b[2m" + . + "\u001b[0m";
+def bold: "\u001b[1m" + . + "\u001b[0m";
+def caption($name): ($name + ((" " * (12 - ($name | length))) // "")) | dim;
+.[$item] as $item
+| $item.attachments[$attachment] as $file
+| ($item.title // $item.citation_key | bold),
+  "",
+  (caption("item") + " " + $item.citation_key),
+  (caption("attachment") + " " + ($file.title // "—")),
+  (caption("type") + " " + $file.media_type),
+  (caption("path") + " " + $file.path),
+  (if $file.uuid == null
+   then caption("managed") + " no — the file is referenced where it lies"
+   else empty end)
+EOF
+else
+  {
+    printf '%s\n' "$common"
+    cat <<'EOF'
+arrange($sort | rtrimstr("\n"); $collection | rtrimstr("\n"))
 | .[]
 | .key as $index
 | .value as $item
@@ -272,16 +279,8 @@ printf 'source\n' >"$LANTAI_PICK_SORT"
 # A user's login shell need not be POSIX-compatible; the bindings are.
 export SHELL=/bin/sh
 
-if $attachments; then
-  cat >"$LANTAI_PICK_HEADER" <<'EOF'
-#!/bin/sh
-collection=any
-[ -s "$LANTAI_PICK_COLLECTION" ] && collection=$(cat "$LANTAI_PICK_COLLECTION")
-printf 'collection: %s\n' "$collection"
-printf 'alt-c collection · TAB select\n'
-EOF
-else
-  cat >"$LANTAI_PICK_HEADER" <<'EOF'
+# One header for both modes, because both now answer to the same keys.
+cat >"$LANTAI_PICK_HEADER" <<'EOF'
 #!/bin/sh
 collection=any
 [ -s "$LANTAI_PICK_COLLECTION" ] && collection=$(cat "$LANTAI_PICK_COLLECTION")
@@ -289,7 +288,6 @@ printf 'match: %s   sort: %s   collection: %s\n' \
   "$(cat "$LANTAI_PICK_MATCH")" "$(cat "$LANTAI_PICK_SORT")" "$collection"
 printf 'alt-a/k/u/t match · alt-y/e/l/r sort · alt-c collection · TAB select\n'
 EOF
-fi
 
 # Collections are not a row column — an item can be in several, so the column
 # was mostly noise. Narrowing to one is a nested picker instead, listing every
@@ -330,32 +328,57 @@ if [ "$columns" -le 0 ]; then
   [ -n "$size" ] && columns=${size##* } || columns=100
 fi
 [ "$columns" -ge 60 ] || columns=60
-# fzf keeps two columns for the pointer and the multi-select marker, and one
-# more for the scrollbar.
-usable=$((columns - 3))
+# fzf keeps two columns for the pointer and the multi-select marker and one for
+# the scrollbar, and spends two more on the marker that says a line continues
+# past the edge — which ours always does, since the searchable columns live
+# there. Leaving room for it keeps the marker off the last real column.
+usable=$((columns - 5))
+
+if [ "$usable" -ge 150 ]; then
+  LANTAI_PICK_W_PEOPLE=46
+elif [ "$usable" -ge 110 ]; then
+  LANTAI_PICK_W_PEOPLE=32
+else
+  LANTAI_PICK_W_PEOPLE=20
+fi
 
 if [ "$LANTAI_PICK_MODE" = attachments ]; then
+  # The attachment columns come out of the author and title budget, so the
+  # rows still describe the item the same way the item picker does.
   LANTAI_PICK_W_MEDIA=16
   if [ "$usable" -ge 140 ]; then
-    LANTAI_PICK_W_ATTACHMENT=24
+    LANTAI_PICK_W_ATTACHMENT=22
   else
-    LANTAI_PICK_W_ATTACHMENT=16
+    LANTAI_PICK_W_ATTACHMENT=14
   fi
-  LANTAI_PICK_W_TITLE=$((usable - LANTAI_PICK_W_ATTACHMENT - LANTAI_PICK_W_MEDIA - 2))
-  export LANTAI_PICK_W_MEDIA LANTAI_PICK_W_ATTACHMENT LANTAI_PICK_W_TITLE
+  LANTAI_PICK_W_PEOPLE=$((LANTAI_PICK_W_PEOPLE - 12))
+  [ "$LANTAI_PICK_W_PEOPLE" -ge 14 ] || LANTAI_PICK_W_PEOPLE=14
+  # The year and the separator after each of the five columns.
+  remainder() {
+    LANTAI_PICK_W_TITLE=$((usable - 8 - LANTAI_PICK_W_PEOPLE \
+      - LANTAI_PICK_W_ATTACHMENT - LANTAI_PICK_W_MEDIA))
+  }
+  remainder
+  # A narrow terminal cannot hold five columns. Rather than overflow, give the
+  # title its floor back out of the media type, then the attachment name.
+  if [ "$LANTAI_PICK_W_TITLE" -lt 20 ]; then
+    for budget in LANTAI_PICK_W_MEDIA LANTAI_PICK_W_ATTACHMENT; do
+      [ "$LANTAI_PICK_W_TITLE" -lt 20 ] || break
+      eval "have=\$$budget"
+      short=$((20 - LANTAI_PICK_W_TITLE))
+      [ "$short" -le "$have" ] || short=$have
+      eval "$budget=\$((have - short))"
+      remainder
+    done
+    [ "$LANTAI_PICK_W_TITLE" -ge 1 ] || LANTAI_PICK_W_TITLE=1
+  fi
+  export LANTAI_PICK_W_MEDIA LANTAI_PICK_W_ATTACHMENT
 else
-  if [ "$usable" -ge 150 ]; then
-    LANTAI_PICK_W_PEOPLE=46
-  elif [ "$usable" -ge 110 ]; then
-    LANTAI_PICK_W_PEOPLE=32
-  else
-    LANTAI_PICK_W_PEOPLE=20
-  fi
   # The year, and the separator after each of the three columns.
   LANTAI_PICK_W_TITLE=$((usable - 6 - LANTAI_PICK_W_PEOPLE))
   [ "$LANTAI_PICK_W_TITLE" -ge 24 ] || LANTAI_PICK_W_TITLE=24
-  export LANTAI_PICK_W_PEOPLE LANTAI_PICK_W_TITLE
 fi
+export LANTAI_PICK_W_PEOPLE LANTAI_PICK_W_TITLE
 
 exec jq -r --rawfile sort "$LANTAI_PICK_SORT" \
   --rawfile collection "$LANTAI_PICK_COLLECTION" \
@@ -400,12 +423,22 @@ fzf_args=(
 # because the columns before them are padded to fill the terminal exactly.
 # --nth is therefore counted from the first column --with-nth keeps.
 if $attachments; then
+  # Two more displayed columns than the item picker, so the searchable ones sit
+  # two further along; everything else about the interface is the same.
   fzf_args+=(
     --with-nth=4..
     --nth=1..
     # fzf quotes a field placeholder before the shell sees it, so the index
     # reaches jq as an argument rather than inside the program text.
     --preview='jq -r --argjson item {1} --argjson attachment {2} -f "$LANTAI_PICK_PREVIEW" "$LANTAI_PICK_CACHE"'
+    --bind="$(scope a '1..' all)"
+    --bind="$(scope k 6 key)"
+    --bind="$(scope u 7 author)"
+    --bind="$(scope t 8 title)"
+    --bind="$(order y year)"
+    --bind="$(order e key)"
+    --bind="$(order l title)"
+    --bind="$(order r source)"
   )
 else
   fzf_args+=(
