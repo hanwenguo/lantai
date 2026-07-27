@@ -23,8 +23,10 @@ const ET_AL: char = '-';
 /// The name part follows `alpha.bst`: a lone author contributes the first three
 /// letters of the family name, two to four authors contribute one initial each,
 /// and a longer list or a trailing `and others` keeps three initials followed by
-/// the et-al marker. Particles stay lowercase, so `van der Berg` alone becomes
-/// `vdB`. Without an author the first significant title word takes the name
+/// the et-al marker. Each initial keeps the case the source used, so the
+/// particles of `van der Berg` stay lowercase and it becomes `vdB`, while
+/// `Van Horn` becomes `VH`. Without an author the first significant title word
+/// takes the name
 /// part's place, and an item with neither becomes `Anon`. The year is its final
 /// two digits and is omitted when no date is known. Collisions receive `a`, `b`,
 /// and later suffixes, as the alphabetic styles disambiguate identical labels.
@@ -92,26 +94,33 @@ fn author_component(author: Option<&str>) -> Option<String> {
     })
 }
 
-/// The initials `alpha.bst` writes as `{v{}}{l{}}`: one lowercase letter per
-/// particle followed by an uppercase letter per family-name token.
+/// The initials `alpha.bst` writes as `{v{}}{l{}}`: one letter per name token,
+/// keeping the case the source used. Only a token spelled in lowercase is a
+/// particle, so `van der Berg` gives `vdB` while `Van Horn` gives `VH` and
+/// `Bañados Schwerter` gives `BS`.
 fn name_initials(name: &PersonName) -> Option<String> {
-    let particles = particle_words(name)
-        .into_iter()
+    let initials = name_words(name)
+        .iter()
         .filter_map(|word| word.chars().next())
-        .map(|letter| letter.to_ascii_lowercase());
-    let family = family_words(name)
-        .into_iter()
-        .filter_map(|word| word.chars().next())
-        .map(|letter| letter.to_ascii_uppercase());
-    let initials = particles.chain(family).collect::<String>();
+        .collect::<String>();
     (!initials.is_empty()).then_some(initials)
+}
+
+/// Every token of a name, in the order the source wrote them.
+fn name_words(name: &PersonName) -> Vec<String> {
+    let mut words = particle_words(name);
+    words.extend(family_words(name));
+    words
 }
 
 /// The opening letters of a lone author's family name, as in `Lovelace` to
 /// `Lov`.
 fn family_prefix(name: &PersonName) -> Option<String> {
-    let family = family_words(name);
-    Some(capitalized_prefix(family.first()?))
+    let mut words = family_words(name);
+    if words.is_empty() {
+        words = name_words(name);
+    }
+    Some(capitalized_prefix(words.first()?))
 }
 
 /// The family-name tokens of a person. A braced organization name such as
@@ -126,7 +135,9 @@ fn family_words(name: &PersonName) -> Vec<String> {
     }
 }
 
-/// The particle tokens of a person, such as `van` and `der`.
+/// The tokens the parser placed before the family name, such as `van` and
+/// `der`. Whether one is really a particle is a question of case, which
+/// `name_initials` answers by keeping the case the source used.
 fn particle_words(name: &PersonName) -> Vec<String> {
     if name.prefix.is_empty() {
         ascii_tokens(name.von.split_whitespace())
@@ -257,6 +268,33 @@ mod tests {
         assert_eq!(
             key(Some("van der Berg, Jan and Jones, Ann"), Some("2019"), None),
             "vdBJ19"
+        );
+        assert_eq!(key(Some("de Vries, Edsko"), Some("2023"), None), "dV23");
+    }
+
+    /// A capitalized token is part of the family name, however many tokens the
+    /// name has: only lowercase spelling makes a particle.
+    #[test]
+    fn capitalized_name_tokens_are_not_particles() {
+        assert_eq!(
+            key(
+                Some("Van Horn, David and Might, Matthew"),
+                Some("2010"),
+                None
+            ),
+            "VHM10"
+        );
+        assert_eq!(
+            key(Some("Bañados Schwerter, Felipe"), Some("2014"), None),
+            "BS14"
+        );
+        assert_eq!(
+            key(Some("De Angelis, Emanuele"), Some("2019"), None),
+            "DA19"
+        );
+        assert_eq!(
+            key(Some("Bueso de Barrio, Luis"), Some("2023"), None),
+            "BdB23"
         );
     }
 

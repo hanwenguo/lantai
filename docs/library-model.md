@@ -39,13 +39,14 @@ those styles print, without its brackets. One author contributes the first three
 letters of the family name and two to four authors contribute one initial each,
 followed by the final two digits of the year — `Lov43`, `GJ79`. Five or more
 authors, or a trailing `and others`, keep three initials and an et-al marker
-(`ABC-95`), particles stay lowercase (`vdB19`), and an organization in braces
-counts as one name (`ISO16`). Those styles print the marker as `+`, which an
-entry key cannot hold, so Lantai writes `-`. Names are abbreviated by the tokens
-the source wrote, so `张伟` counts once and becomes `Zha`. An item with no author
-uses its first significant title word (`Unc19`), an item with neither becomes
-`Anon`, and an unknown date contributes nothing. Collisions receive `a`, `b`,
-and later suffixes, as the alphabetic styles disambiguate identical labels.
+(`ABC-95`), and an organization in braces counts as one name (`ISO16`). Those
+styles print the marker as `+`, which an entry key cannot hold, so Lantai writes
+`-`. Names are abbreviated by the tokens the source wrote, so `张伟` counts once
+and becomes `Zha`, and each initial keeps its case, so `van der Berg` gives
+`vdB19` while `Van Horn` gives `VH10`. An item with no author uses its first
+significant title word (`Unc19`), an item with neither becomes `Anon`, and an
+unknown date contributes nothing. Collisions receive `a`, `b`, and later
+suffixes, as the alphabetic styles disambiguate identical labels.
 Lantai never automatically regenerates an existing key. Rename one explicitly:
 
 ```sh
