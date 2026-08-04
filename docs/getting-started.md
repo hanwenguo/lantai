@@ -4,9 +4,18 @@
 
 ## Requirements
 
-Building Lantai requires Rust 1.88 or newer and Cargo. The core binary is Rust
-and has no runtime shell dependency. The optional official extensions require
-Bash and additional tools listed in the [extension guide](../extension/README.md).
+The Homebrew tap provides bottles for Apple Silicon and Intel macOS, and for
+ARM64 and x86-64 Linux:
+
+```sh
+brew install hanwenguo/tap/lantai
+lantai --version
+```
+
+Building Lantai from source requires Rust 1.88 or newer and Cargo. The core
+binary is Rust and has no runtime shell dependency. The optional official
+extensions require Bash and additional tools listed in the [extension
+guide](../extension/README.md).
 
 Build and install the current checkout:
 

@@ -31,7 +31,18 @@ likewise discards the keywords a translator scrapes. CSL-formatted
 bibliography export is part of the intended core scope, but is not available in
 Lantai 0.5.0. Lantai is not a Zotero profile or database replacement.
 
-## Install from source
+## Installation
+
+### Homebrew
+
+```sh
+brew install hanwenguo/tap/lantai
+```
+
+The tap builds Lantai from the tagged source release and provides bottles for
+Apple Silicon and Intel macOS, and for ARM64 and x86-64 Linux.
+
+### Install from source
 
 Lantai requires Rust 1.88 or newer:
 
