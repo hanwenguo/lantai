@@ -4,8 +4,8 @@
 
 ## Requirements
 
-The Homebrew tap provides bottles for Apple Silicon and Intel macOS, and for
-ARM64 and x86-64 Linux:
+The Homebrew tap provides bottles for Apple Silicon on macOS 26, and for ARM64
+and x86-64 Linux. Intel macOS is not supported:
 
 ```sh
 brew install hanwenguo/tap/lantai

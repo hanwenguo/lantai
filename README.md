@@ -40,7 +40,8 @@ brew install hanwenguo/tap/lantai
 ```
 
 The tap builds Lantai from the tagged source release and provides bottles for
-Apple Silicon and Intel macOS, and for ARM64 and x86-64 Linux.
+Apple Silicon on macOS 26, and for ARM64 and x86-64 Linux. Intel macOS is not
+supported.
 
 ### Install from source
 
@@ -129,7 +130,7 @@ GitHub Actions runs the same three checks on Linux and macOS for every push to
 `main` and every pull request, and separately type-checks the crate against
 the minimum supported Rust version declared in `Cargo.toml`. Pushing a `vX.Y.Z`
 tag whose version matches `Cargo.toml` repeats those checks, then builds
-`x86_64` and `aarch64` binaries for Linux and macOS and publishes them, with
-SHA-256 checksums, as a GitHub release.
+`x86_64` and `aarch64` binaries for Linux and an `aarch64` binary for macOS 26.
+It publishes them, with SHA-256 checksums, as a GitHub release.
 
 The repository-wide contribution and release rules are in `AGENTS.md`.
