@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Compact search over a Lantai library.
+#
+#   lsearch [--abstracts] [--paths] [--sort KEYS] [--] TERM...
+#
+# Writes one tab-separated row per match: citation key, year, short author
+# list, title. Terms are the `lantai list` query language. Raw `lantai list`
+# JSON carries every field twice (expanded and raw) for every match, which
+# floods a context window on a library of any size; this keeps a 200-item
+# result under a few thousand tokens.
+#
+#   --abstracts  print each abstract on its own indented line after the row
+#   --paths      append the resolved absolute path of the first attachment
+#   --sort KEYS  passed through to `lantai list --sort`
+set -euo pipefail
+
+lantai_bin=${LANTAI:-lantai}
+want_abstracts=0
+want_paths=0
+sort_keys=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --abstracts) want_abstracts=1; shift ;;
+    --paths) want_paths=1; shift ;;
+    --sort) sort_keys=${2:?--sort needs a value}; shift 2 ;;
+    --sort=*) sort_keys=${1#--sort=}; shift ;;
+    --) shift; break ;;
+    -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+    *) break ;;
+  esac
+done
+
+base=""
+if [[ $want_paths -eq 1 ]]; then
+  library=$("$lantai_bin" check --json | jq -r '.library')
+  base=$(dirname "$library")
+fi
+
+list_args=(list)
+[[ -n $sort_keys ]] && list_args+=("--sort=$sort_keys")
+list_args+=(--)
+
+"$lantai_bin" "${list_args[@]}" "$@" | jq -r \
+  --argjson abstracts "$want_abstracts" \
+  --argjson paths "$want_paths" \
+  --arg base "$base" '
+  def field($n): [.fields[]? | select(.name == $n) | .value] | (.[0] // "");
+
+  def year:
+    . as $i
+    | (if ($i | field("year")) != "" then ($i | field("year")) else ($i | field("date")) end)
+    | (capture("(?<y>[0-9]{4})").y? // "");
+
+  def authors:
+    . as $i
+    | (if ($i | field("author")) == "" then ($i | field("editor")) else ($i | field("author")) end)
+    | if . == "" then "" else
+        [splits(" and ")]
+        | map(if test(",") then split(",")[0] else (split(" ") | last) end)
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | if length == 1 then .[0]
+          elif length == 2 then "\(.[0]) & \(.[1])"
+          else "\(.[0]) et al." end
+      end;
+
+  .[]
+  | . as $item
+  | [ (.citation_key // .uuid // "?"), year, authors, (.title // "") ] as $row
+  | ($row | @tsv)
+    + (if $paths == 1 then
+         "\t" + ((.attachments[0].path // "")
+                 | if . == "" then ""
+                   elif startswith("/") then .
+                   else $base + "/" + . end)
+       else "" end)
+    + (if $abstracts == 1 then
+         ($item | field("abstract")) as $a
+         | if $a == "" then "" else "\n    " + ($a | gsub("\\s+"; " ")) end
+       else "" end)
+'

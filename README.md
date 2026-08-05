@@ -17,7 +17,8 @@ Lantai supports:
 - an authenticated, loopback-only REST API with revision preconditions;
 - modern Zotero Connector item, PDF, snapshot, standalone-file, and collection flows;
 - bulk import of a Zotero RDF export, with its files and collections;
-- Git-style custom commands and synchronous post-save hooks.
+- Git-style custom commands and synchronous post-save hooks;
+- a coding-agent skill for searching, citing from, and maintaining the library.
 
 Lantai intentionally provides one library and no GUI. Collections are one flat
 namespace stored in BibLaTeX `keywords`, nested by spelling them with `/`;
@@ -113,7 +114,8 @@ Start with the [Lantai user manual](docs/index.md):
 - [Zotero Connector setup](docs/zotero-connector.md);
 - [backups, recovery, security, and troubleshooting](docs/operations.md);
 - [searching, the interactive picker, and extension workflows](docs/cli-workflows.md);
-- [custom post-save hooks](docs/post-save-hooks.md).
+- [custom post-save hooks](docs/post-save-hooks.md);
+- [the agent skill](skills/README.md).
 
 Developer references are kept separately in the [implementation
 plan](docs/PLAN.md) and [Zotero Connector protocol analysis](docs/zotero-connector-protocol.md).

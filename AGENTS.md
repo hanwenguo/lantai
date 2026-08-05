@@ -14,6 +14,11 @@ These instructions apply to the entire repository.
   update the affected user-manual pages, reference material, examples, and
   navigation in the same change. A feature is not complete while its
   documentation is missing or stale.
+- The agent skill under `skills/` deliberately holds no copy of the manual, so
+  that an installed skill cannot describe a Lantai its user does not have. Keep
+  it that way: send the agent to `lantai COMMAND --help` and to the published
+  documentation instead of restating them. The few behaviors it does assert in
+  its own voice are still subject to the rule above.
 - `Cargo.lock` is committed because Lantai is an application. Commit useful
   `proptest-regressions/` seeds, but never commit `target/`, `output/`, local
   configuration, bearer tokens, browser profiles, or captured attachment data.

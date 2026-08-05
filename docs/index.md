@@ -22,6 +22,8 @@ endpoint.
 - [Install or write Git-style extensions](../extension/README.md).
 - [Run a custom post-save hook](post-save-hooks.md), including custom
   citation-key generation.
+- [Install the agent skill](../skills/README.md), which teaches a coding agent
+  to search the library, gather literature context, and cite from it.
 
 ## Scope and limitations
 
