@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 
-use bibtex_parser::parse_date_parts;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
+use crate::dates::normalize as normalize_date;
 use crate::library::NewItem;
 use crate::{Error, Result};
 
@@ -439,44 +439,6 @@ fn scalar_value(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn normalize_date(value: &str) -> String {
-    let value = value.trim();
-    let date_prefix = value
-        .split_once('T')
-        .map_or(value, |(date, _)| date)
-        .replace('/', "-");
-    let components = date_prefix.split('-').collect::<Vec<_>>();
-    if (1..=3).contains(&components.len())
-        && components.iter().all(|component| {
-            !component.is_empty() && component.chars().all(|ch| ch.is_ascii_digit())
-        })
-    {
-        let candidate = components
-            .iter()
-            .enumerate()
-            .map(|(index, component)| {
-                if index == 0 {
-                    (*component).to_owned()
-                } else {
-                    format!("{:02}", component.parse::<u8>().unwrap_or_default())
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("-");
-        if let Ok(parts) = parse_date_parts(&candidate) {
-            let mut normalized = format!("{:04}", parts.year);
-            if let Some(month) = parts.month {
-                normalized.push_str(&format!("-{month:02}"));
-            }
-            if let Some(day) = parts.day {
-                normalized.push_str(&format!("-{day:02}"));
-            }
-            return normalized;
-        }
-    }
-    value.to_owned()
-}
-
 fn map_language(value: &str) -> String {
     match value
         .split(['-', '_'])
@@ -610,11 +572,34 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_connector_dates_without_dropping_human_dates() {
-        assert_eq!(normalize_date("2026/7/3"), "2026-07-03");
-        assert_eq!(normalize_date("2026-07-03T12:30:00Z"), "2026-07-03");
-        assert_eq!(normalize_date("2026-02-29"), "2026-02-29");
-        assert_eq!(normalize_date("Spring 2026"), "Spring 2026");
+    fn date_and_access_date_arrive_as_iso() {
+        let dates = |date: &str, access_date: &str| {
+            let source: ZoteroItem = serde_json::from_value(serde_json::json!({
+                "id": "connector-1",
+                "itemType": "journalArticle",
+                "title": "A Sketch",
+                "date": date,
+                "accessDate": access_date
+            }))
+            .unwrap();
+            let fields = map_item(source)
+                .unwrap()
+                .item
+                .fields
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            (fields["date"].clone(), fields["urldate"].clone())
+        };
+
+        assert_eq!(
+            dates("2026/7/3", "2026-07-03T12:30:00Z"),
+            ("2026-07-03".to_owned(), "2026-07-03".to_owned())
+        );
+        assert_eq!(
+            dates("Spring 2026", "October 27, 2024"),
+            ("2026".to_owned(), "2024-10-27".to_owned()),
+            "a date a translator scraped as prose still reaches BibLaTeX as a date"
+        );
     }
 
     #[test]

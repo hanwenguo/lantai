@@ -61,6 +61,14 @@ viewed file uses the standalone-attachment flow. Sessions are short-lived and
 in memory; restarting Lantai during a capture loses the session, not already
 committed items.
 
+A translator reports whatever date the page printed, so the publication and
+access dates are converted to ISO 8601 — `YYYY-MM-DD`, `YYYY-MM`, or `YYYY` —
+using the same normalization as [RDF import](cli-reference.md#import).
+`October 27, 2024` and `27/10/2024` become `2024-10-27`, and a date whose month
+cannot be recognized narrows to the year alone: `Spring 2026` is stored as
+`2026`. A value with no recognizable year, such as `n.d.`, is stored as it
+arrived.
+
 Lantai supports collections and files but not notes, recognition, attachment
 resolvers, cloud sync, or Zotero's word-processor integration. A nonempty popup
 note is rejected.

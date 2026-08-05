@@ -5,6 +5,7 @@ pub mod client;
 pub mod collections;
 pub mod config;
 pub mod connector;
+pub mod dates;
 pub mod error;
 pub mod hook;
 pub mod keys;

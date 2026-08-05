@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use roxmltree::{Document, Node};
 use serde_json::Value as JsonValue;
 
+use crate::dates::normalize as normalize_date;
 use crate::zotero::{ZoteroCreator, ZoteroItem};
 use crate::{Error, Result};
 
@@ -546,98 +547,6 @@ fn text(node: Node<'_, '_>) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-const MONTHS: [(&str, u32); 36] = [
-    ("january", 1),
-    ("jan", 1),
-    ("\u{4e00}\u{6708}", 1),
-    ("february", 2),
-    ("feb", 2),
-    ("\u{4e8c}\u{6708}", 2),
-    ("march", 3),
-    ("mar", 3),
-    ("\u{4e09}\u{6708}", 3),
-    ("april", 4),
-    ("apr", 4),
-    ("\u{56db}\u{6708}", 4),
-    ("may", 5),
-    ("\u{4e94}\u{6708}", 5),
-    ("mai", 5),
-    ("june", 6),
-    ("jun", 6),
-    ("\u{516d}\u{6708}", 6),
-    ("july", 7),
-    ("jul", 7),
-    ("\u{4e03}\u{6708}", 7),
-    ("august", 8),
-    ("aug", 8),
-    ("\u{516b}\u{6708}", 8),
-    ("september", 9),
-    ("sep", 9),
-    ("\u{4e5d}\u{6708}", 9),
-    ("october", 10),
-    ("oct", 10),
-    ("\u{5341}\u{6708}", 10),
-    ("november", 11),
-    ("nov", 11),
-    ("\u{5341}\u{4e00}\u{6708}", 11),
-    ("december", 12),
-    ("dec", 12),
-    ("\u{5341}\u{4e8c}\u{6708}", 12),
-];
-
-/// Rewrite a Zotero RDF date as ISO 8601.
-///
-/// Unlike RIS or the Connector's JSON, the RDF exporter renders `dc:date` in
-/// the running application's locale, so most values arrive as `October 27,
-/// 2024` or `\u{5341}\u{6708} 12, 2017`. BibLaTeX needs `YYYY-MM-DD`, so
-/// recover what is recognizable and fall back to the bare year, which is
-/// always valid, rather than writing prose into the `date` field.
-fn normalize_date(value: &str) -> String {
-    let value = value.trim();
-    let lowered = value.to_lowercase();
-    let named = MONTHS
-        .iter()
-        .filter(|(name, _)| lowered.contains(name))
-        .max_by_key(|(name, _)| name.len())
-        .map(|(_, month)| *month);
-
-    let mut numbers = Vec::new();
-    for chunk in value.split(|character: char| !character.is_ascii_digit()) {
-        if !chunk.is_empty()
-            && let Ok(number) = chunk.parse::<u32>()
-        {
-            numbers.push((chunk.len(), number));
-        }
-    }
-    let Some(year_index) = numbers.iter().position(|(width, _)| *width == 4) else {
-        return value.to_owned();
-    };
-    let year = numbers.remove(year_index).1;
-
-    let mut rest = numbers.into_iter().map(|(_, number)| number);
-    let (month, day) = match named {
-        Some(month) => (Some(month), rest.next()),
-        None => {
-            let (first, second) = (rest.next(), rest.next());
-            match (first, second) {
-                // A day-first locale puts the day where the month is expected.
-                (Some(first), Some(second)) if first > 12 && second <= 12 => {
-                    (Some(second), Some(first))
-                }
-                other => other,
-            }
-        }
-    };
-
-    match (month, day) {
-        (Some(month), Some(day)) if (1..=12).contains(&month) && (1..=31).contains(&day) => {
-            format!("{year:04}-{month:02}-{day:02}")
-        }
-        (Some(month), _) if (1..=12).contains(&month) => format!("{year:04}-{month:02}"),
-        _ => format!("{year:04}"),
-    }
-}
-
 /// BibLaTeX page ranges use `--`; Zotero exports typographic dashes.
 fn normalize_pages(value: &str) -> String {
     let mut normalized = String::with_capacity(value.len());
@@ -932,24 +841,19 @@ mod tests {
     }
 
     #[test]
-    fn localized_dates_become_iso_or_fall_back_to_the_year() {
-        for (input, expected) in [
-            ("2024-10-27", "2024-10-27"),
-            ("2024", "2024"),
-            ("October 27, 2024", "2024-10-27"),
-            ("\u{5341}\u{6708} 12, 2017", "2017-10-12"),
-            ("\u{5341}\u{4e8c}\u{6708} 20, 2019", "2019-12-20"),
-            ("June, 2001", "2001-06"),
-            ("2023/02/15", "2023-02-15"),
-            ("07/2006", "2006-07"),
-            ("2021/01", "2021-01"),
-            ("2019.8", "2019-08"),
-            ("27/10/2024", "2024-10-27"),
-            ("Spring 2026", "2026"),
-            ("no date here", "no date here"),
-        ] {
-            assert_eq!(normalize_date(input), expected, "input {input:?}");
-        }
+    fn localized_dates_become_iso() {
+        let import = parse_body(concat!(
+            "<bib:Book rdf:about=\"#item_1\">",
+            "<z:itemType>book</z:itemType>",
+            "<dc:title>Locale Rendered</dc:title>",
+            "<dc:date>October 27, 2024</dc:date>",
+            "<dcterms:dateSubmitted>\u{5341}\u{6708} 12, 2017</dcterms:dateSubmitted>",
+            "</bib:Book>",
+        ));
+
+        let item = &import.items[0];
+        assert_eq!(field(item, "date"), Some("2024-10-27"));
+        assert_eq!(field(item, "accessDate"), Some("2017-10-12"));
     }
 
     #[test]
