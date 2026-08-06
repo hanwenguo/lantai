@@ -30,7 +30,7 @@ deduplication. Importing a Zotero library maps its collection tree onto that
 namespace and imports neither its own tags nor its notes; browser capture
 likewise discards the keywords a translator scrapes. CSL-formatted
 bibliography export is part of the intended core scope, but is not available in
-Lantai 0.6.0. Lantai is not a Zotero profile or database replacement.
+Lantai 0.6.1. Lantai is not a Zotero profile or database replacement.
 
 ## Installation
 
