@@ -964,7 +964,7 @@ fn attachment_source_name(url: &str, title: &str, content_type: &str) -> String 
         .filter(|name| !name.is_empty())
         .unwrap_or(title);
     let mut candidate = crate::attachments::sanitize_filename(Path::new(candidate));
-    if Path::new(&candidate).extension().is_none()
+    if !extension_matches_content_type(&candidate, content_type)
         && let Some(extension) = mime_guess::get_mime_extensions_str(content_type)
             .and_then(|extensions| extensions.first())
     {
@@ -972,6 +972,20 @@ fn attachment_source_name(url: &str, title: &str, content_type: &str) -> String 
         candidate.push_str(extension);
     }
     candidate
+}
+
+/// A dot in the URL tail is not an extension: DOI-shaped names such as
+/// `3009837.3009849` make `Path::extension` report `3009849`. Only trust a
+/// suffix that actually maps back to the content type we were served.
+fn extension_matches_content_type(candidate: &str, content_type: &str) -> bool {
+    Path::new(candidate)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            mime_guess::from_ext(extension)
+                .iter()
+                .any(|guess| guess.essence_str() == content_type)
+        })
 }
 
 fn normalize_session_tags(tags: SessionTags) -> Vec<String> {
@@ -1284,6 +1298,41 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn source_name_appends_extension_unless_the_url_tail_already_matches() {
+        // DOI-shaped tails look like they carry an extension but do not.
+        assert_eq!(
+            attachment_source_name(
+                "https://dl.acm.org/doi/pdf/10.1145/3009837.3009849",
+                "Full Text PDF",
+                "application/pdf"
+            ),
+            "3009837.3009849.pdf"
+        );
+        assert_eq!(
+            attachment_source_name(
+                "https://arxiv.org/pdf/2501.12345v1",
+                "Full Text PDF",
+                "application/pdf"
+            ),
+            "2501.12345v1.pdf"
+        );
+        // A genuine extension matching the content type is left alone.
+        assert_eq!(
+            attachment_source_name(
+                "https://example.org/files/paper.pdf?download=1",
+                "Full Text PDF",
+                "application/pdf"
+            ),
+            "paper.pdf"
+        );
+        // No extension at all still gets one.
+        assert_eq!(
+            attachment_source_name("https://example.org/files/paper", "Snapshot", "text/html"),
+            "paper.htm"
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]
